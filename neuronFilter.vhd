@@ -2,6 +2,9 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
+library xil_defaultlib;
+use xil_defaultlib.constants_pkg.all;
+
 entity neuronFilter is
   generic (
     AXIS_TDATA_WIDTH_G : positive := 64;
@@ -32,9 +35,6 @@ end entity neuronFilter;
 
 architecture rtl of neuronFilter is
   subtype DATA_BUS_LOW_C  is integer range (AXIS_TDATA_WIDTH_G/2)-1 downto 0;
-  constant TIME_HIGH_EVT: std_logic_vector(3 downto 0) := "1000";
-  constant POS_EVT: std_logic_vector(3 downto 0) := "0001";
-  constant NEG_EVT: std_logic_vector(3 downto 0) := "0000";
 
   signal forward_packet        : std_logic := '0';
   signal s_axis_tready_signal  : std_logic;
@@ -65,12 +65,14 @@ begin
       
       if s_axis_tvalid = '1' and s_axis_tready_signal = '1' then
 
-        -- First TimeEvt or TriggerEvt
-        -- TO DO: Modify to refuse events rather than accepting
-        -- if s_axis_tdata(63 downto 60) = TIME_HIGH_EVT or unsigned(s_axis_tdata(53 downto 43)) > 384 then
+        -- TIME_EVT should always go through
         if s_axis_tdata(63 downto 60) = TIME_HIGH_EVT or 
+        -- TRIG_EVT should always go through
+        s_axis_tdata(63 downto 60) = TIME_HIGH_EVT or 
+        -- ROI
          (unsigned(s_axis_tdata(53 downto 43)) > 384 and unsigned(s_axis_tdata(53 downto 43)) < (1280-384) and
          unsigned(s_axis_tdata(42 downto 32)) > 40 and unsigned(s_axis_tdata(42 downto 32)) < (720-40)) then
+
           forward := '1';
         else
           forward := '0';
