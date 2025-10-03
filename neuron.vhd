@@ -7,7 +7,7 @@ use xil_defaultlib.constants_pkg.all;
 
 entity neuron is
     generic (
-        MEMBRANE_POTENTIAL_SIZE : positive := 5
+        MEMBRANE_POTENTIAL_SIZE : positive := 8
     );
     port (
         clk : in std_logic;
@@ -25,17 +25,17 @@ begin
     process (clk, areset, in_signal)
     begin
         if areset = '0' then
-            membrane_potential <= (others => '0');
+            membrane_potential <= initial_potential;
         elsif rising_edge(clk) then
             out_signal <= '0';
             if membrane_potential(MEMBRANE_POTENTIAL_SIZE - 1) = '1' then
                 out_signal <= '1';
                 membrane_potential <= initial_potential;
             elsif in_signal = '1' then
-                if (unsigned(membrane_potential) = 0) then
-                    membrane_potential <= (0 => '1', others => '0');
-                else
-                    membrane_potential <= std_logic_vector(shift_left(unsigned(membrane_potential), 1));
+                membrane_potential <= std_logic_vector(shift_left(unsigned(membrane_potential), 7));
+            else
+                if (unsigned(membrane_potential) /= 1) then
+                    membrane_potential <= std_logic_vector(shift_right(unsigned(membrane_potential), 1));
                 end if;
             end if;
         end if;
