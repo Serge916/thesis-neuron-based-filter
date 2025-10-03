@@ -7,7 +7,7 @@ use xil_defaultlib.constants_pkg.all;
 
 entity neuron is
     generic (
-        MEMBRANE_POTENTIAL_SIZE : positive := 8
+        MEMBRANE_POTENTIAL_SIZE : positive := 5
     );
     port (
         clk : in std_logic;
@@ -18,8 +18,8 @@ entity neuron is
 end entity neuron;
 
 architecture rtl of neuron is
-    constant initial_potential : std_logic_vector(MEMBRANE_POTENTIAL_SIZE - 1 downto 0) := (0 => '1', others => '0');
-    signal membrane_potential : std_logic_vector(MEMBRANE_POTENTIAL_SIZE - 1 downto 0) := initial_potential;
+    constant initial_potential : std_logic_vector(MEMBRANE_POTENTIAL_SIZE downto 0) := (0 => '1', others => '0');
+    signal membrane_potential : std_logic_vector(MEMBRANE_POTENTIAL_SIZE downto 0) := initial_potential;
 
 begin
     process (clk, areset, in_signal)
@@ -27,19 +27,17 @@ begin
         if areset = '0' then
             membrane_potential <= initial_potential;
         elsif rising_edge(clk) then
-            out_signal <= '0';
-            if membrane_potential(MEMBRANE_POTENTIAL_SIZE - 1) = '1' then
-                out_signal <= '1';
+            if membrane_potential(MEMBRANE_POTENTIAL_SIZE) = '1' then
                 membrane_potential <= initial_potential;
             elsif in_signal = '1' then
-                membrane_potential <= std_logic_vector(shift_left(unsigned(membrane_potential), 7));
+                membrane_potential <= std_logic_vector(unsigned(membrane_potential) + 12);
             else
-                if (unsigned(membrane_potential) /= 1) then
-                    membrane_potential <= std_logic_vector(shift_right(unsigned(membrane_potential), 1));
+                if (unsigned(membrane_potential(MEMBRANE_POTENTIAL_SIZE - 1 downto 0)) /= 1) then
+                    membrane_potential <= std_logic_vector(unsigned(membrane_potential) - 1);
                 end if;
             end if;
         end if;
 
     end process;
-
+    out_signal <= membrane_potential(MEMBRANE_POTENTIAL_SIZE);
 end rtl;
