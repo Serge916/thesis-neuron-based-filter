@@ -9,6 +9,8 @@ entity cropper is
   generic (
     AXIS_TDATA_WIDTH_G : positive := 64;
     AXIS_TUSER_WIDTH_G : positive := 1;
+    ROI_WIDTH_PIXEL_AMOUNT : positive := 512;
+    ROI_HEIGHT_PIXEL_AMOUNT : positive := 512;
     LET_THROUGH_ONLY_EVENTS : boolean := false
   );
   port (
@@ -36,6 +38,10 @@ end entity cropper;
 
 architecture rtl of cropper is
   subtype DATA_BUS_LOW_C is integer range (AXIS_TDATA_WIDTH_G/2) - 1 downto 0;
+  constant ROI_WIDTH_BASE_PIXEL : positive := (1280 - ROI_WIDTH_PIXEL_AMOUNT)/2;
+  constant ROI_WIDTH_FINAL_PIXEL : positive := 1280 - (1280 - ROI_WIDTH_PIXEL_AMOUNT)/2;
+  constant ROI_HEIGHT_BASE_PIXEL : positive := (720 - ROI_HEIGHT_PIXEL_AMOUNT)/2;
+  constant ROI_HEIGHT_FINAL_PIXEL : positive := 720 - (720 - ROI_HEIGHT_PIXEL_AMOUNT)/2;
 
   signal forward_packet : std_logic := '0';
   signal s_axis_tready_signal : std_logic;
