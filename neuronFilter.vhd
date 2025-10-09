@@ -48,7 +48,10 @@ begin
   cropper : entity work.cropper
     generic map(
       AXIS_TDATA_WIDTH_G => 64,
-      AXIS_TUSER_WIDTH_G => 1
+      AXIS_TUSER_WIDTH_G => 1,
+      ROI_WIDTH_PIXEL_AMOUNT => 512,
+      ROI_HEIGHT_PIXEL_AMOUNT => 512,
+      LET_THROUGH_ONLY_EVENTS => true
     )
     port map(
       -- Clock and Reset

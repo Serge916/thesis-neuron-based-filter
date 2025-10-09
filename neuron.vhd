@@ -14,6 +14,7 @@ entity neuron is
     port (
         clk : in std_logic;
         areset : in std_logic;
+        enable : in std_logic;
         in_signal : in std_logic;
         out_signal : out std_logic
     );
@@ -31,7 +32,7 @@ begin
         elsif rising_edge(clk) then
             if membrane_potential(MEMBRANE_POTENTIAL_SIZE) = '1' then
                 membrane_potential <= initial_potential;
-            elsif in_signal = '1' then
+            elsif in_signal = '1' and enable = '1' then
                 membrane_potential <= std_logic_vector(unsigned(membrane_potential) + MEMBRANE_INCREASE_VALUE);
             else
                 if (unsigned(membrane_potential(MEMBRANE_POTENTIAL_SIZE - 1 downto 0)) /= 1) then
