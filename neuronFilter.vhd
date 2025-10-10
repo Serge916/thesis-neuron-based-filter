@@ -101,5 +101,4 @@ begin
       m_axis_tuser => m_axis_tuser,
       m_axis_tlast => m_axis_tlast
     );
-
 end rtl;

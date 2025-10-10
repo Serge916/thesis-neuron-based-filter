@@ -38,8 +38,6 @@ end entity neuronMatrix;
 architecture rtl of neuronMatrix is
     signal positive_excitation_signal : std_logic;
     signal negative_excitation_signal : std_logic;
-    signal positive_spike_signal : std_logic;
-    signal negative_spike_signal : std_logic;
     signal s_axis_tready_signal : std_logic;
     signal route_x : unsigned(6 downto 0);
     signal route_y : unsigned(6 downto 0);
@@ -47,6 +45,8 @@ architecture rtl of neuronMatrix is
     signal enable_y : unsigned(0 to 127);
     type t_array is array (0 to 127, 0 to 127) of std_logic;
     signal enable_mat : t_array;
+    signal positive_spike_mat : t_array;
+    signal negative_spike_mat : t_array;
 
 begin
 
@@ -63,7 +63,7 @@ begin
                     areset => aresetn,
                     enable => enable_mat(i, j),
                     in_signal => positive_excitation_signal,
-                    out_signal => positive_spike_signal
+                    out_signal => positive_spike_mat(i, j)
                 );
 
             neuronNegative : entity work.neuron
@@ -76,7 +76,7 @@ begin
                     areset => aresetn,
                     enable => enable_mat(i, j),
                     in_signal => negative_excitation_signal,
-                    out_signal => negative_spike_signal
+                    out_signal => negative_spike_mat(i, j)
                 );
 
         end generate gen_x;
