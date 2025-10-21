@@ -10,7 +10,8 @@ entity neuronMatrix is
         AXIS_TDATA_WIDTH_G : positive := 64;
         AXIS_TUSER_WIDTH_G : positive := 1;
         GRID_SIZE_Y : positive := 128;
-        GRID_SIZE_X : positive := 128
+        GRID_SIZE_X : positive := 128;
+        SPIKE_ACCUMULATION_LIMIT : positive := 15000
     );
     port (
         -- Clock and Reset
@@ -43,10 +44,12 @@ architecture rtl of neuronMatrix is
     signal route_y : unsigned(6 downto 0);
     signal enable_x : unsigned(0 to 127);
     signal enable_y : unsigned(0 to 127);
-    type t_array is array (0 to 127, 0 to 127) of std_logic;
-    signal enable_mat : t_array;
-    signal positive_spike_mat : t_array;
-    signal negative_spike_mat : t_array;
+
+    signal enable_mat : t_one_hot_encoding_array;
+    signal positive_spike_mat : t_one_hot_encoding_array;
+    signal negative_spike_mat : t_one_hot_encoding_array;
+    signal spike_counter : unsigned;
+    signal spike_counter_signal : std_logic;
 
 begin
 
@@ -63,7 +66,8 @@ begin
                     areset => aresetn,
                     enable => enable_mat(i, j),
                     in_signal => positive_excitation_signal,
-                    out_signal => positive_spike_mat(i, j)
+                    out_signal => positive_spike_mat(i, j),
+                    spike_out_signal => spike_counter
                 );
 
             neuronNegative : entity work.neuron
@@ -76,7 +80,8 @@ begin
                     areset => aresetn,
                     enable => enable_mat(i, j),
                     in_signal => negative_excitation_signal,
-                    out_signal => negative_spike_mat(i, j)
+                    out_signal => negative_spike_mat(i, j),
+                    spike_out_signal => spike_counter
                 );
 
         end generate gen_x;
@@ -118,6 +123,19 @@ begin
                 end if;
 
                 negative_excitation_signal <= not positive_excitation_signal;
+            end if;
+        end if;
+    end process;
+
+    spikeCountering : process (aclk, aresetn)
+    begin
+        if rising_edge(aclk) then
+            if spike_counter = SPIKE_ACCUMULATION_LIMIT then
+                spike_counter <= (others => '0');
+            elsif spike_counter_signal = '1' then
+                spike_counter <= spike_counter + 1;
+            else
+                spike_counter <= spike_counter;
             end if;
         end if;
     end process;
