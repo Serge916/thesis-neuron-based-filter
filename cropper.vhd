@@ -51,11 +51,17 @@ architecture rtl of cropper is
   signal m_axis_tkeep_reg : std_logic_vector((AXIS_TDATA_WIDTH_G/8) - 1 downto 0);
   signal m_axis_tuser_reg : std_logic_vector(AXIS_TUSER_WIDTH_G - 1 downto 0);
   signal m_axis_tlast_reg : std_logic := '0';
+
+  signal address_map_x : std_logic_vector(10 downto 0);
+  signal address_map_y : std_logic_vector(10 downto 0);
 begin
 
   process (aclk, aresetn)
     variable forward : std_logic;
     variable count : unsigned(5 downto 0);
+    variable address_map_x : std_logic_vector(10 downto 0);
+    variable address_map_y : std_logic_vector(10 downto 0);
+
   begin
     if aresetn = '0' then
       forward := '0';
@@ -71,14 +77,18 @@ begin
       m_axis_tvalid_reg <= '0';
 
       if s_axis_tvalid = '1' and s_axis_tready_signal = '1' then
+        address_map_x := std_logic_vector(unsigned(s_axis_tdata(53 downto 43)) - to_unsigned(ROI_WIDTH_BASE_PIXEL, 11));
+        address_map_y := std_logic_vector(unsigned(s_axis_tdata(42 downto 32)) - to_unsigned(ROI_HEIGHT_BASE_PIXEL, 11));
 
+        -- address_map_x := s_axis_tdata(53 downto 43);
+        -- address_map_y := s_axis_tdata(42 downto 32);
         -- TIME_EVT should always go through if flag is set
         if (s_axis_tdata(63 downto 60) = TIME_HIGH_EVT and not LET_THROUGH_ONLY_EVENTS) or
           -- TRIG_EVT should always go through if flag is set
           (s_axis_tdata(63 downto 60) = TRIG_EVT and not LET_THROUGH_ONLY_EVENTS) or
           -- ROI
-          (unsigned(s_axis_tdata(53 downto 43)) > 384 and unsigned(s_axis_tdata(53 downto 43)) < (1280 - 384) and
-          unsigned(s_axis_tdata(42 downto 32)) > 40 and unsigned(s_axis_tdata(42 downto 32)) < (720 - 40)) then
+          (unsigned(s_axis_tdata(53 downto 43)) > ROI_WIDTH_BASE_PIXEL and unsigned(s_axis_tdata(53 downto 43)) < ROI_WIDTH_FINAL_PIXEL and
+          unsigned(s_axis_tdata(42 downto 32)) > ROI_HEIGHT_BASE_PIXEL and unsigned(s_axis_tdata(42 downto 32)) < ROI_HEIGHT_FINAL_PIXEL) then
 
           forward := '1';
         else
@@ -87,12 +97,13 @@ begin
 
         if forward = '1' then
           m_axis_tvalid_reg <= '1';
-          m_axis_tdata_reg <= s_axis_tdata;
+          m_axis_tdata_reg <= s_axis_tdata(63 downto 54) & address_map_x & address_map_y & s_axis_tdata(31 downto 0);
           m_axis_tkeep_reg <= s_axis_tkeep;
           m_axis_tuser_reg <= s_axis_tuser;
           m_axis_tlast_reg <= s_axis_tlast;
         end if;
         forward_packet <= forward;
+
       end if;
     end if;
   end process;

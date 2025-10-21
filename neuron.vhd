@@ -16,6 +16,7 @@ entity neuron is
         areset : in std_logic;
         enable : in std_logic;
         in_signal : in std_logic;
+        active_pixel : in std_logic;
         spike_out_signal : out std_logic;
         out_signal : out std_logic
     );
@@ -35,7 +36,7 @@ begin
             if membrane_potential(MEMBRANE_POTENTIAL_SIZE) = '1' then
                 membrane_potential <= initial_potential;
                 out_signal <= '1';
-            elsif in_signal = '1' and enable = '1' then
+            elsif in_signal = '1' and enable = '1' and active_pixel = '1' then
                 membrane_potential <= std_logic_vector(unsigned(membrane_potential) + MEMBRANE_INCREASE_VALUE);
             else
                 if (unsigned(membrane_potential(MEMBRANE_POTENTIAL_SIZE - 1 downto 0)) /= 1) then
