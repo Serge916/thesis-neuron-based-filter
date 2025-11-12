@@ -8,6 +8,8 @@ package constants_pkg is
   constant POS_EVT : std_logic_vector(3 downto 0) := "0001";
   constant NEG_EVT : std_logic_vector(3 downto 0) := "0000";
   constant TRIG_EVT : std_logic_vector(3 downto 0) := "1010";
+  constant NEGATIVE_CHANNEL : integer := 0;
+  constant POSITIVE_CHANNEL : integer := 1;
 
   type t_one_hot_encoding_array is array (0 to 127, 0 to 127) of std_logic;
 end package constants_pkg;

@@ -12,7 +12,8 @@ entity neuronMatrix is
         AXIS_TUSER_WIDTH_G : positive := 1;
         GRID_SIZE_Y : positive := 128;
         GRID_SIZE_X : positive := 128;
-        SPIKE_ACCUMULATION_LIMIT : positive := 15000
+        SPIKE_ACCUMULATION_LIMIT : positive := 15000;
+        MEMBRANE_POTENTIAL_SIZE : positive := 8
     );
     port (
         -- Clock and Reset
@@ -39,91 +40,39 @@ end entity neuronMatrix;
 
 architecture rtl of neuronMatrix is
     signal positive_excitation_signal : std_logic;
-    signal negative_excitation_signal : std_logic;
     signal s_axis_tready_signal : std_logic;
-    signal route_x : unsigned(4 downto 0);
+    -- X axis is 0 to 15 clusters of 32 elements. 16*32=512
+    signal route_x : unsigned(3 downto 0);
+    -- Y axis is 0 to 127
     signal route_y : unsigned(6 downto 0);
     signal enable_x : unsigned(0 to 127);
     signal enable_y : unsigned(0 to 127);
 
-    signal enable_mat : t_one_hot_encoding_array;
-    signal positive_spike_mat : t_one_hot_encoding_array;
-    signal negative_spike_mat : t_one_hot_encoding_array;
     signal spike_counter : natural range 0 to SPIKE_ACCUMULATION_LIMIT;
     signal spike_counter_signal : std_logic;
 
-    signal active_pixel : std_logic_vector(3 downto 0);
+    -- Per message, 8 Processing Elements are needed
+    signal active_pixel : std_logic_vector(7 downto 0);
 
+    type filter_memory_t is array (0 to 127, 0 to 127, 0 to 1) of unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
+    signal filter_memory : filter_memory_t := (others => (others => (others => to_unsigned(1, MEMBRANE_POTENTIAL_SIZE))));
+    signal valid_event : std_logic;
+
+    signal decay_trigger : std_logic;
+    signal decay_counter : unsigned(7 downto 0);
 begin
-
-    -- generate 2D array of neurons
-    gen_y : for j in 0 to (GRID_SIZE_Y - 1) generate
-        -- In the X axis, neurons are clustered due to the event encoding format (PSEVT2.1)
-        gen_x : for i in 0 to (GRID_SIZE_X/4 - 1) generate
-            gen_k : for k in 0 to 3 generate
-                neuronPositive : entity work.neuron
-                    generic map(
-                        MEMBRANE_POTENTIAL_SIZE => 5
-                    )
-                    port map(
-                        clk => aclk,
-                        areset => aresetn,
-                        enable => enable_mat(i, j),
-                        active_pixel => active_pixel(k),
-                        in_signal => positive_excitation_signal,
-                        out_signal => positive_spike_mat(i, j),
-                        spike_out_signal => spike_counter_signal
-                    );
-
-                neuronNegative : entity work.neuron
-                    generic map(
-                        MEMBRANE_POTENTIAL_SIZE => 5
-                    )
-                    port map(
-                        clk => aclk,
-                        areset => aresetn,
-                        enable => enable_mat(i, j),
-                        active_pixel => active_pixel(k),
-                        in_signal => negative_excitation_signal,
-                        out_signal => negative_spike_mat(i, j),
-                        spike_out_signal => spike_counter_signal
-                    );
-
-            end generate gen_k;
-        end generate gen_x;
-    end generate gen_y;
-
-    -- generate 2D array of enable signals
-    gen_enable_x : for i in 0 to (GRID_SIZE_X/4 - 1) generate
-        enable_x(i) <= '1' when route_x = to_unsigned(i, 7) else
-        '0';
-    end generate;
-
-    gen_enable_y : for j in 0 to (GRID_SIZE_Y - 1) generate
-        enable_y(j) <= '1' when route_y = to_unsigned(j, 7) else
-        '0';
-
-    end generate;
-
-    gen_enable_xy_outer : for j in 0 to (GRID_SIZE_Y - 1) generate
-        gen_enable_xy_inner : for i in 0 to (GRID_SIZE_X/4 - 1) generate
-            enable_mat(i, j) <= enable_x(i) and enable_y(j);
-        end generate;
-    end generate;
-
     eventDistribution : process (aclk, aresetn)
     begin
         if rising_edge(aclk) then
             positive_excitation_signal <= '0';
-            negative_excitation_signal <= '0';
             if s_axis_tvalid = '1' and s_axis_tready_signal = '1' then
                 -- Divide by 4 or 2 shifts right, same as leaving out the 2LSb
                 -- Target dimension is 128, only 7 bits needed. Therefore, get the slice [8:2]
-                -- On the X axis, we divide again by 4, as neurons are clustered
-
-                -- TODO: Coordinates arrive unchanged, I need to substract them here (or in Cropper)
-                route_x <= unsigned((s_axis_tdata(51 downto 47)));
+                -- On the X axis, we divide by 7 (128 in total), as neurons are clustered by EVT2.1
+                route_x <= unsigned(s_axis_tdata(51 downto 48));
                 route_y <= unsigned(s_axis_tdata(40 downto 34));
+
+                valid_event <= '1';
 
                 if (s_axis_tdata(63 downto 60) = POS_EVT) then
                     positive_excitation_signal <= '1';
@@ -131,25 +80,39 @@ begin
                     positive_excitation_signal <= '0';
                 end if;
 
-                negative_excitation_signal <= not positive_excitation_signal;
-
-                active_pixel(3) <= or_reduce(s_axis_tdata(31 downto 24));
-                active_pixel(2) <= or_reduce(s_axis_tdata(23 downto 16));
-                active_pixel(1) <= or_reduce(s_axis_tdata(15 downto 8));
-                active_pixel(0) <= or_reduce(s_axis_tdata(7 downto 0));
+                active_pixel(7) <= or_reduce(s_axis_tdata(31 downto 28));
+                active_pixel(6) <= or_reduce(s_axis_tdata(27 downto 24));
+                active_pixel(5) <= or_reduce(s_axis_tdata(23 downto 20));
+                active_pixel(4) <= or_reduce(s_axis_tdata(19 downto 16));
+                active_pixel(3) <= or_reduce(s_axis_tdata(15 downto 12));
+                active_pixel(2) <= or_reduce(s_axis_tdata(11 downto 8));
+                active_pixel(1) <= or_reduce(s_axis_tdata(7 downto 4));
+                active_pixel(0) <= or_reduce(s_axis_tdata(3 downto 0));
+            else
+                valid_event <= '0';
             end if;
         end if;
     end process;
 
-    spikeCountering : process (aclk, aresetn)
+    eventIntegration : process (aclk, aresetn)
+        variable xi : integer;
+        variable yi : integer;
     begin
+
         if rising_edge(aclk) then
-            if spike_counter = SPIKE_ACCUMULATION_LIMIT then
-                spike_counter <= 0;
-            elsif spike_counter_signal = '1' then
-                spike_counter <= spike_counter + 1;
-            else
-                spike_counter <= spike_counter;
+            if valid_event = '1' then
+                for i in 0 to 7 loop
+                    xi := to_integer(route_x) * 8 + i;
+                    yi := to_integer(route_y);
+
+                    if active_pixel(i) = '1' then
+                        if positive_excitation_signal = '1' then
+                            filter_memory(yi, xi, POSITIVE_CHANNEL) <= filter_memory(yi, xi, POSITIVE_CHANNEL) sll 1;
+                        else
+                            filter_memory(yi, xi, NEGATIVE_CHANNEL) <= filter_memory(yi, xi, NEGATIVE_CHANNEL) sll 1;
+                        end if;
+                    end if;
+                end loop;
             end if;
         end if;
     end process;
