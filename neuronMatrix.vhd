@@ -39,14 +39,11 @@ entity neuronMatrix is
 end entity neuronMatrix;
 
 architecture rtl of neuronMatrix is
-    signal positive_excitation_signal : std_logic;
     signal s_axis_tready_signal : std_logic;
     -- X axis is 0 to 15 clusters of 32 elements. 16*32=512
     signal route_x : unsigned(3 downto 0);
     -- Y axis is 0 to 127
     signal route_y : unsigned(6 downto 0);
-    signal enable_x : unsigned(0 to 127);
-    signal enable_y : unsigned(0 to 127);
 
     signal spike_counter : natural range 0 to SPIKE_ACCUMULATION_LIMIT;
     signal spike_counter_signal : std_logic;
@@ -54,30 +51,50 @@ architecture rtl of neuronMatrix is
     -- Per message, 8 Processing Elements are needed
     signal active_pixel : std_logic_vector(7 downto 0);
 
-    type filter_memory_t is array (0 to 127, 0 to 127, 0 to 1) of unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
-    signal filter_memory : filter_memory_t := (others => (others => (others => (others => '0'))));
+    type filter_memory_t is array (0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1) of unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
+    constant INITIAL_WORD : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0) := (others => '0');
+    signal filter_negative_memory : filter_memory_t := (others => INITIAL_WORD);
+    signal filter_positive_memory : filter_memory_t := (others => INITIAL_WORD);
+    attribute ram_style : string;
+    attribute ram_style of filter_negative_memory : signal is "block";
+    attribute ram_style of filter_positive_memory : signal is "block";
+
     signal valid_event : std_logic;
+    signal valid_event_d : std_logic;
+    signal valid_event_dd : std_logic;
+
+    signal memory_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+    signal memory_address_d : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+    signal memory_address_dd : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+
+    signal excitation_polarity : std_logic;
+    signal excitation_polarity_d : std_logic;
+    signal excitation_polarity_dd : std_logic;
 
     signal decay_trigger : std_logic;
     signal decay_counter : unsigned(7 downto 0);
+
+    signal word_in : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
+    signal word_out : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
 begin
     eventDistribution : process (aclk, aresetn)
     begin
         if rising_edge(aclk) then
-            positive_excitation_signal <= '0';
+            excitation_polarity <= '0';
             if s_axis_tvalid = '1' and s_axis_tready_signal = '1' then
                 -- Divide by 4 or 2 shifts right, same as leaving out the 2LSb
                 -- Target dimension is 128, only 7 bits needed. Therefore, get the slice [8:2]
                 -- On the X axis, we divide by 7 (128 in total), as neurons are clustered by EVT2.1
                 route_x <= unsigned(s_axis_tdata(51 downto 48));
                 route_y <= unsigned(s_axis_tdata(40 downto 34));
-
+                memory_address <= to_integer(unsigned(s_axis_tdata(40 downto 34))) * CLUSTERS_PER_ROW + to_integer(unsigned(s_axis_tdata(51 downto 48)));
                 valid_event <= '1';
 
+                -- Read the value from memory
                 if (s_axis_tdata(63 downto 60) = POS_EVT) then
-                    positive_excitation_signal <= '1';
+                    excitation_polarity <= POSITIVE_CHANNEL;
                 else
-                    positive_excitation_signal <= '0';
+                    excitation_polarity <= NEGATIVE_CHANNEL;
                 end if;
 
                 active_pixel(7) <= or_reduce(s_axis_tdata(31 downto 28));
@@ -88,46 +105,72 @@ begin
                 active_pixel(2) <= or_reduce(s_axis_tdata(11 downto 8));
                 active_pixel(1) <= or_reduce(s_axis_tdata(7 downto 4));
                 active_pixel(0) <= or_reduce(s_axis_tdata(3 downto 0));
+
             else
                 valid_event <= '0';
             end if;
         end if;
     end process;
 
-    eventIntegration : process (aclk, aresetn)
-        variable xi : integer;
-        variable yi : integer;
+    readOut : process (aclk)
     begin
-
         if rising_edge(aclk) then
-            if valid_event = '1' then
-                for i in 0 to 7 loop
-                    xi := to_integer(route_x) * 8 + i;
-                    yi := to_integer(route_y);
+            excitation_polarity_d <= excitation_polarity;
+            valid_event_d <= valid_event;
+            memory_address_d <= memory_address;
 
+            if valid_event = '1' then
+                if excitation_polarity = POSITIVE_CHANNEL then
+                    word_in <= filter_positive_memory(memory_address);
+                else
+                    word_in <= filter_negative_memory(memory_address);
+                end if;
+            end if;
+        end if;
+    end process;
+
+    eventIntegration : process (aclk)
+        variable cell : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
+    begin
+        if rising_edge(aclk) then
+            excitation_polarity_dd <= excitation_polarity_d;
+            valid_event_dd <= valid_event_d;
+            memory_address_dd <= memory_address_d;
+
+            word_out <= word_in;
+            -- Write back updated cluster from PREVIOUS cycle's event
+            if valid_event_d = '1' then
+                for i in 0 to NEURONS_PER_CLUSTER - 1 loop
                     if active_pixel(i) = '1' then
-                        if positive_excitation_signal = '1' then
-                            -- If initialized, shift
-                            if filter_memory(yi, xi, POSITIVE_CHANNEL) /= x"00" then
-                                filter_memory(yi, xi, POSITIVE_CHANNEL) <= filter_memory(yi, xi, POSITIVE_CHANNEL) sll 1;
-                            else
-                                -- If not initialized, make it 1
-                                filter_memory(yi, xi, POSITIVE_CHANNEL) <= x"01";
-                            end if;
+                        -- extract this neuron
+                        cell := word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE);
+
+                        if cell /= INITIAL_WORD then
+                            cell := cell sll 1;
                         else
-                            -- Same for the NEG channel
-                            if filter_memory(yi, xi, NEGATIVE_CHANNEL) /= x"00" then
-                                filter_memory(yi, xi, NEGATIVE_CHANNEL) <= filter_memory(yi, xi, NEGATIVE_CHANNEL) sll 1;
-                            else
-                                filter_memory(yi, xi, NEGATIVE_CHANNEL) <= x"01";
-                            end if;
+                            cell := to_unsigned(1, MEMBRANE_POTENTIAL_SIZE);
                         end if;
+
+                        -- write updated cell back into word_out
+                        word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE) <= cell;
                     end if;
                 end loop;
             end if;
         end if;
     end process;
 
+    writeBack : process (aclk)
+    begin
+        if rising_edge(aclk) then
+            if valid_event_dd = '1' then
+                if excitation_polarity_dd = POSITIVE_CHANNEL then
+                    filter_positive_memory(memory_address_dd) <= word_out;
+                else
+                    filter_negative_memory(memory_address_dd) <= word_out;
+                end if;
+            end if;
+        end if;
+    end process;
     -- Always ready to receive
     s_axis_tready_signal <= '1';
     s_axis_tready <= s_axis_tready_signal;
