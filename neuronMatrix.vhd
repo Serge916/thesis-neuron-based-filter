@@ -55,7 +55,7 @@ architecture rtl of neuronMatrix is
     signal active_pixel : std_logic_vector(7 downto 0);
 
     type filter_memory_t is array (0 to 127, 0 to 127, 0 to 1) of unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
-    signal filter_memory : filter_memory_t := (others => (others => (others => to_unsigned(1, MEMBRANE_POTENTIAL_SIZE))));
+    signal filter_memory : filter_memory_t := (others => (others => (others => (others => '0'))));
     signal valid_event : std_logic;
 
     signal decay_trigger : std_logic;
@@ -107,9 +107,20 @@ begin
 
                     if active_pixel(i) = '1' then
                         if positive_excitation_signal = '1' then
-                            filter_memory(yi, xi, POSITIVE_CHANNEL) <= filter_memory(yi, xi, POSITIVE_CHANNEL) sll 1;
+                            -- If initialized, shift
+                            if filter_memory(yi, xi, POSITIVE_CHANNEL) /= x"00" then
+                                filter_memory(yi, xi, POSITIVE_CHANNEL) <= filter_memory(yi, xi, POSITIVE_CHANNEL) sll 1;
+                            else
+                                -- If not initialized, make it 1
+                                filter_memory(yi, xi, POSITIVE_CHANNEL) <= x"01";
+                            end if;
                         else
-                            filter_memory(yi, xi, NEGATIVE_CHANNEL) <= filter_memory(yi, xi, NEGATIVE_CHANNEL) sll 1;
+                            -- Same for the NEG channel
+                            if filter_memory(yi, xi, NEGATIVE_CHANNEL) /= x"00" then
+                                filter_memory(yi, xi, NEGATIVE_CHANNEL) <= filter_memory(yi, xi, NEGATIVE_CHANNEL) sll 1;
+                            else
+                                filter_memory(yi, xi, NEGATIVE_CHANNEL) <= x"01";
+                            end if;
                         end if;
                     end if;
                 end loop;
