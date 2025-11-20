@@ -79,7 +79,7 @@ architecture rtl of neuronMatrix is
     signal word_out : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
 
     type activation_t is array (0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1) of std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
-    signal negative_frame : activation_t := (others => (others => '0'));
+    signal negative_frame : activation_t := (others => (others => '1'));
     signal positive_frame : activation_t := (others => (others => '0'));
     attribute ram_style of negative_frame : signal is "block";
     attribute ram_style of positive_frame : signal is "block";
@@ -97,6 +97,7 @@ architecture rtl of neuronMatrix is
     signal flush_buffIdx : natural range 0 to FLUSH_BUFFER_POSITIONS;
     signal flush_rowIdx : integer range 0 to SNN_FRAME_HEIGHT - 1;
     signal flush_colIdx : integer range 0 to SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1;
+    signal flush_chanIdx : std_logic;
 begin
 
     -- STAGE 1: Read the incoming AXI message. If valid, get the neuron address to route it to. Check which neurons in the cluster to activate.
@@ -243,17 +244,26 @@ begin
         end if;
     end process;
 
+    -- TODO: Rework this whole thing
     FSM : process (aclk)
     begin
         if rising_edge(aclk) then
             prev_state <= state;
-            if decay_counter_hit = '1' then
-                state <= DECAY;
-            elsif spike_counter_hit = '1' then
-                state <= FLUSH;
-            else
-                state <= state;
-            end if;
+            state <= state;
+            case state is
+                when INTEGRATE =>
+                    if decay_counter_hit = '1' then
+                        state <= DECAY;
+                    elsif spike_counter_hit = '1' then
+                        state <= FLUSH;
+                    end if;
+                when FLUSH =>
+                    if flush_ongoing = '0' and prev_state = FLUSH then
+                        state <= INTEGRATE;
+                    end if;
+                when DECAY =>
+                    state <= DECAY;
+            end case;
         end if;
     end process;
 
@@ -280,17 +290,20 @@ begin
 
                     -- First execution
                     if prev_state /= FLUSH then
-                        address := 0;
+                        -- address := 0;
+                        flush_address <= 0;
                         flush_rowIdx <= 0;
                         flush_colIdx <= 0;
                         flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
+                        flush_chanIdx <= NEGATIVE_CHANNEL;
 
                         flush_ongoing <= '1';
                     end if;
 
                     if flush_ongoing = '1' then
                         -- Update indexes for next iteration
-                        address := address + 1;
+                        -- address := address + 1;
+                        flush_address <= flush_address + 1;
                         if flush_buffIdx = 0 then
                             -- End of word
                             flush_colIdx <= flush_colIdx + 1;
@@ -307,8 +320,14 @@ begin
                                     -- End of frame
                                     --raise tlast
                                     m_axis_tlast <= '1';
-                                    flush_ongoing <= '0';
-                                    address := address - 1;
+                                    -- address := 0;
+                                    flush_address <= 0;
+                                    flush_rowIdx <= 0;
+                                    if flush_chanIdx = NEGATIVE_CHANNEL then
+                                        flush_chanIdx <= POSITIVE_CHANNEL;
+                                    else
+                                        flush_ongoing <= '0';
+                                    end if;
                                 end if;
                             end if;
                         else
@@ -317,9 +336,14 @@ begin
                         end if;
 
                     end if;
-                    -- flush_buffIdx has to decrement following this logic to keep the endianness
-                    flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= positive_frame(address);
-                    flush_address <= address;
+                    if flush_chanIdx = NEGATIVE_CHANNEL then
+                        -- flush_buffIdx has to decrement following this logic to keep the endianness
+                        flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= negative_frame(flush_address);
+                    else
+                        flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= positive_frame(flush_address);
+                    end if;
+
+                    -- flush_address <= address;
             end case;
         end if;
     end process;
