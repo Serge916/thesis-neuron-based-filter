@@ -76,7 +76,18 @@ architecture rtl of neuronMatrix is
 
     signal word_in : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
     signal word_out : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
+
+    type activation_t is array (0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1) of std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
+    signal negative_frame : activation_t := (others => (others => '0'));
+    signal positive_frame : activation_t := (others => (others => '0'));
+    attribute ram_style of negative_frame : signal is "block";
+    attribute ram_style of positive_frame : signal is "block";
+    signal frame_row : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
+    signal spike_out : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
+
 begin
+
+    -- STAGE 1: Read the incoming AXI message. If valid, get the neuron address to route it to. Check which neurons in the cluster to activate.
     eventDistribution : process (aclk, aresetn)
     begin
         if rising_edge(aclk) then
@@ -112,6 +123,7 @@ begin
         end if;
     end process;
 
+    -- STAGE 2: Read from memory the corresponding address containing 8 neuron states.
     readOut : process (aclk)
     begin
         if rising_edge(aclk) then
@@ -122,15 +134,20 @@ begin
             if valid_event = '1' then
                 if excitation_polarity = POSITIVE_CHANNEL then
                     word_in <= filter_positive_memory(memory_address);
+                    frame_row <= positive_frame(memory_address);
                 else
                     word_in <= filter_negative_memory(memory_address);
+                    frame_row <= negative_frame(memory_address);
                 end if;
             end if;
         end if;
     end process;
 
+    -- STAGE 3: Perform integration of the activated neurons
     eventIntegration : process (aclk)
         variable cell : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
+        variable spike : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
+        variable spike_accum : integer range 0 to NEURONS_PER_CLUSTER;
     begin
         if rising_edge(aclk) then
             excitation_polarity_dd <= excitation_polarity_d;
@@ -139,38 +156,58 @@ begin
 
             word_out <= word_in;
             -- Write back updated cluster from PREVIOUS cycle's event
+            spike_accum := 0;
             if valid_event_d = '1' then
                 for i in 0 to NEURONS_PER_CLUSTER - 1 loop
+                    spike(i) := '0';
                     if active_pixel(i) = '1' then
                         -- extract this neuron
                         cell := word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE);
 
-                        if cell /= INITIAL_WORD then
-                            cell := cell sll 1;
+                        -- If last bit is 1, fire a spike
+                        if cell(MEMBRANE_POTENTIAL_SIZE - 1) = '1' then
+                            spike(i) := '1';
+                            spike_accum := spike_accum + 1;
                         else
-                            cell := to_unsigned(1, MEMBRANE_POTENTIAL_SIZE);
+                            spike(i) := '0';
                         end if;
 
+                        -- If it is all 0, initialize it to 1. Else, shift 1 position to the left.
+                        if cell = INITIAL_WORD then
+                            cell := to_unsigned(1, MEMBRANE_POTENTIAL_SIZE);
+                        else
+                            cell := cell sll 1;
+                        end if;
+                        report "i=" & integer'image(i) &
+                            " cell=" & integer'image(to_integer(cell)) &
+                            " spike(i)=" & std_logic'image(spike(i)) &
+                            " spike_counter=" & integer'image(spike_counter);
                         -- write updated cell back into word_out
                         word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE) <= cell;
                     end if;
                 end loop;
+                spike_out <= spike or frame_row;
+                spike_counter <= spike_counter + spike_accum;
             end if;
         end if;
     end process;
 
+    -- STAGE 4: Write back to memory the updated neuron states
     writeBack : process (aclk)
     begin
         if rising_edge(aclk) then
             if valid_event_dd = '1' then
                 if excitation_polarity_dd = POSITIVE_CHANNEL then
                     filter_positive_memory(memory_address_dd) <= word_out;
+                    positive_frame(memory_Address_dd) <= spike_out;
                 else
                     filter_negative_memory(memory_address_dd) <= word_out;
+                    negative_frame(memory_Address_dd) <= spike_out;
                 end if;
             end if;
         end if;
     end process;
+
     -- Always ready to receive
     s_axis_tready_signal <= '1';
     s_axis_tready <= s_axis_tready_signal;
