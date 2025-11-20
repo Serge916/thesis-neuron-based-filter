@@ -92,12 +92,20 @@ architecture rtl of neuronMatrix is
 
     constant FLUSH_BUFFER_POSITIONS : natural := (AXIS_TDATA_WIDTH_G/NEURONS_PER_CLUSTER);
     signal flush_out : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
+    signal flush_fetch : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0) := (others => '0');
     signal flush_ongoing : std_logic := '0';
     signal flush_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
     signal flush_buffIdx : natural range 0 to FLUSH_BUFFER_POSITIONS;
     signal flush_rowIdx : integer range 0 to SNN_FRAME_HEIGHT - 1;
     signal flush_colIdx : integer range 0 to SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1;
     signal flush_chanIdx : std_logic;
+
+    -- Registered AXI output (one-cycle pipeline for flush)
+    signal axi_data_reg : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
+    signal axi_keep_reg : std_logic_vector((AXIS_TDATA_WIDTH_G/8) - 1 downto 0) := (others => '0');
+    signal axi_user_reg : std_logic_vector(AXIS_TUSER_WIDTH_G - 1 downto 0) := (others => '0');
+    signal axi_last_reg : std_logic := '0';
+    signal axi_valid_reg : std_logic := '0';
 begin
 
     -- STAGE 1: Read the incoming AXI message. If valid, get the neuron address to route it to. Check which neurons in the cluster to activate.
@@ -268,83 +276,120 @@ begin
     end process;
 
     axiStream : process (aclk)
-        variable address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
-
+        -- Local variable to assemble the current AXI word in this cycle
+        variable flush_word_v : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0);
+        variable is_last_word : boolean;
     begin
         if rising_edge(aclk) then
+            -- Default: drive AXI outputs from registered values
+            m_axis_tdata <= axi_data_reg;
+            m_axis_tkeep <= axi_keep_reg;
+            m_axis_tuser <= axi_user_reg;
+            m_axis_tlast <= axi_last_reg;
+            m_axis_tvalid <= axi_valid_reg;
+
+            -- By default, no new word this cycle
+            axi_valid_reg <= '0';
+            axi_last_reg <= '0';
+
+            -- Start with the previous flush_out content
+            flush_word_v := flush_out;
+            is_last_word := false;
+
             case state is
+                    -- INTEGRATE: normal operation, no flush output
                 when INTEGRATE =>
                     s_axis_tready <= '1';
-                    m_axis_tvalid <= '0';
+
+                    -- DECAY: no AXI output, just stall input
                 when DECAY =>
                     s_axis_tready <= '0';
-                    m_axis_tvalid <= '0';
-                when FLUSH =>
-                    -- FLUSH should disappear, I'm creating it for now. To be removed in the future
-                    s_axis_tready <= '0';
-                    m_axis_tvalid <= '0';
-                    m_axis_tdata <= (others => '0');
-                    m_axis_tkeep <= (others => '0');
-                    m_axis_tuser <= (others => '1');
-                    m_axis_tlast <= '0';
 
-                    -- First execution
+                    -- FLUSH: walk through frame and emit AXI words
+                when FLUSH =>
+                    s_axis_tready <= '0';
+
+                    -- First FLUSH cycle: initialise indices and start negative channel
                     if prev_state /= FLUSH then
-                        -- address := 0;
                         flush_address <= 0;
                         flush_rowIdx <= 0;
                         flush_colIdx <= 0;
                         flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
                         flush_chanIdx <= NEGATIVE_CHANNEL;
-
                         flush_ongoing <= '1';
-                    end if;
 
-                    if flush_ongoing = '1' then
-                        -- Update indexes for next iteration
-                        -- address := address + 1;
-                        flush_address <= flush_address + 1;
+                        -- First read (will be used next cycle)
+                        flush_fetch <= negative_frame(0);
+
+                        -- Ongoing FLUSH
+                    elsif flush_ongoing = '1' then
+                        -- 1) Assemble current word slice into variable flush_word_v
+                        --    flush_fetch is the data read in the previous cycle.
+                        flush_word_v((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1
+                        downto flush_buffIdx * NEURONS_PER_CLUSTER) := flush_fetch;
+
+                        -- 2) Check if this slice completes the AXI word
                         if flush_buffIdx = 0 then
-                            -- End of word
-                            flush_colIdx <= flush_colIdx + 1;
-                            flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
-                            m_axis_tdata <= flush_out;
-                            m_axis_tvalid <= '1';
-                            m_axis_tkeep <= (others => '1');
+                            -- Word fully assembled in flush_word_v:
+                            --   - register it into axi_*_reg
+                            --   - it will appear on m_axis_* in the NEXT cycle
+                            axi_data_reg <= flush_word_v;
+                            axi_keep_reg <= (others => '1');
+                            axi_user_reg <= (others => '1');
+                            axi_valid_reg <= '1';
+
+                            -- Is this the last word of the last row of the positive channel?
+                            if (flush_rowIdx = SNN_FRAME_HEIGHT - 1) and
+                                (flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1) and
+                                (flush_chanIdx = POSITIVE_CHANNEL) then
+                                axi_last_reg <= '1';
+                                flush_ongoing <= '0';
+                            end if;
+
+                            -- 3) Update column / row / channel indices for NEXT word
                             if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
                                 -- End of row
-                                flush_rowIdx <= flush_rowIdx + 1;
                                 flush_colIdx <= 0;
-
                                 if flush_rowIdx = SNN_FRAME_HEIGHT - 1 then
-                                    -- End of frame
-                                    --raise tlast
-                                    m_axis_tlast <= '1';
-                                    -- address := 0;
-                                    flush_address <= 0;
+                                    -- End of frame for this channel
                                     flush_rowIdx <= 0;
                                     if flush_chanIdx = NEGATIVE_CHANNEL then
                                         flush_chanIdx <= POSITIVE_CHANNEL;
-                                    else
-                                        flush_ongoing <= '0';
                                     end if;
+                                else
+                                    flush_rowIdx <= flush_rowIdx + 1;
                                 end if;
+                            else
+                                flush_colIdx <= flush_colIdx + 1;
                             end if;
+
+                            -- Reset buffer index for next word
+                            flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
+
                         else
-                            --Normal iteration
+                            -- Still filling the current word: just decrement buffer index.
                             flush_buffIdx <= flush_buffIdx - 1;
                         end if;
 
-                    end if;
-                    if flush_chanIdx = NEGATIVE_CHANNEL then
-                        -- flush_buffIdx has to decrement following this logic to keep the endianness
-                        flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= negative_frame(flush_address);
-                    else
-                        flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= positive_frame(flush_address);
-                    end if;
+                        -- 4) Advance memory address and schedule next fetch.
+                        --    Address wraps at end of frame memory.
+                        if flush_address = (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 then
+                            flush_address <= 0;
+                        else
+                            flush_address <= flush_address + 1;
+                        end if;
 
-                    -- flush_address <= address;
+                        if flush_chanIdx = NEGATIVE_CHANNEL then
+                            flush_fetch <= negative_frame(flush_address);
+                        else
+                            flush_fetch <= positive_frame(flush_address);
+                        end if;
+
+                    end if; -- flush_ongoing = '1'
             end case;
+
+            -- Finally, commit the assembled flush word to the signal.
+            flush_out <= flush_word_v;
         end if;
     end process;
 
