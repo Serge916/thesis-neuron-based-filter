@@ -13,6 +13,7 @@ entity neuronMatrix is
         GRID_SIZE_Y : positive := 128;
         GRID_SIZE_X : positive := 128;
         SPIKE_ACCUMULATION_LIMIT : positive := 15000;
+        DECAY_COUNTER_LIMIT : positive := 128;
         MEMBRANE_POTENTIAL_SIZE : positive := 8
     );
     port (
@@ -46,7 +47,7 @@ architecture rtl of neuronMatrix is
     signal route_y : unsigned(6 downto 0);
 
     signal spike_counter : natural range 0 to SPIKE_ACCUMULATION_LIMIT;
-    signal spike_counter_signal : std_logic;
+    signal spike_counter_hit : std_logic := '0';
 
     -- Per message, 8 Processing Elements are needed
     signal active_pixel : std_logic_vector(7 downto 0);
@@ -71,19 +72,26 @@ architecture rtl of neuronMatrix is
     signal excitation_polarity_d : std_logic;
     signal excitation_polarity_dd : std_logic;
 
-    signal decay_trigger : std_logic;
-    signal decay_counter : unsigned(7 downto 0);
+    signal decay_counter : natural range 0 to DECAY_COUNTER_LIMIT := 0;
+    signal decay_counter_hit : std_logic;
 
     signal word_in : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
     signal word_out : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
 
     type activation_t is array (0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1) of std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
     signal negative_frame : activation_t := (others => (others => '0'));
-    signal positive_frame : activation_t := (others => (others => '0'));
+    signal positive_frame : activation_t := (others => (others => '1'));
     attribute ram_style of negative_frame : signal is "block";
     attribute ram_style of positive_frame : signal is "block";
     signal frame_row : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
     signal spike_out : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
+
+    type state_t is (INTEGRATE, DECAY, FLUSH);
+    signal state : state_t := INTEGRATE;
+
+    constant FLUSH_BUFFER_POSITIONS : natural := (AXIS_TDATA_WIDTH_G/NEURONS_PER_CLUSTER);
+    signal flush_out : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
+    signal flush_ongoing : std_logic := '0';
 
 begin
 
@@ -92,7 +100,7 @@ begin
     begin
         if rising_edge(aclk) then
             excitation_polarity <= '0';
-            if s_axis_tvalid = '1' and s_axis_tready_signal = '1' then
+            if s_axis_tvalid = '1' and state = INTEGRATE then
                 -- Divide by 4 or 2 shifts right, same as leaving out the 2LSb
                 -- Target dimension is 128, only 7 bits needed. Therefore, get the slice [8:2]
                 -- On the X axis, we divide by 7 (128 in total), as neurons are clustered by EVT2.1
@@ -157,6 +165,8 @@ begin
             word_out <= word_in;
             -- Write back updated cluster from PREVIOUS cycle's event
             spike_accum := 0;
+            -- Default value for spike_counter_hit
+            spike_counter_hit <= '0';
             if valid_event_d = '1' then
                 for i in 0 to NEURONS_PER_CLUSTER - 1 loop
                     spike(i) := '0';
@@ -187,7 +197,14 @@ begin
                     end if;
                 end loop;
                 spike_out <= spike or frame_row;
-                spike_counter <= spike_counter + spike_accum;
+                -- Trigger frame flushing. Check whether there is an operation ongoing with spike_counter_hit. It should be '0' if nothing is happening.
+                -- if spike_counter >= SPIKE_ACCUMULATION_LIMIT and flush_ongoing = '0' then
+                if spike_counter >= 3 then
+                    spike_counter_hit <= '1';
+                    spike_counter <= 0;
+                else
+                    spike_counter <= spike_counter + spike_accum;
+                end if;
             end if;
         end if;
     end process;
@@ -199,16 +216,97 @@ begin
             if valid_event_dd = '1' then
                 if excitation_polarity_dd = POSITIVE_CHANNEL then
                     filter_positive_memory(memory_address_dd) <= word_out;
-                    positive_frame(memory_Address_dd) <= spike_out;
+                    positive_frame(memory_address_dd) <= spike_out;
                 else
                     filter_negative_memory(memory_address_dd) <= word_out;
-                    negative_frame(memory_Address_dd) <= spike_out;
+                    negative_frame(memory_address_dd) <= spike_out;
                 end if;
             end if;
         end if;
     end process;
 
-    -- Always ready to receive
-    s_axis_tready_signal <= '1';
-    s_axis_tready <= s_axis_tready_signal;
+    -- Trigger decay execution
+    decayTrigger : process (aclk)
+    begin
+        if rising_edge(aclk) then
+            if decay_counter = DECAY_COUNTER_LIMIT then
+                decay_counter <= 0;
+                decay_counter_hit <= '1';
+            else
+                decay_counter <= decay_counter + 1;
+                decay_counter_hit <= '0';
+            end if;
+        end if;
+    end process;
+
+    FSM : process (aclk)
+    begin
+        if rising_edge(aclk) then
+            if decay_counter_hit = '1' then
+                state <= DECAY;
+            elsif spike_counter_hit = '1' then
+                state <= FLUSH;
+            else
+                state <= state;
+            end if;
+        end if;
+    end process;
+
+    axiStream : process (aclk)
+        variable buffIdx : natural range 0 to FLUSH_BUFFER_POSITIONS;
+        variable rowIdx : integer range 0 to SNN_FRAME_HEIGHT - 1;
+        variable address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
+    begin
+        if rising_edge(aclk) then
+            case state is
+                when INTEGRATE =>
+                    s_axis_tready <= '1';
+                    m_axis_tvalid <= '0';
+                when DECAY =>
+                    s_axis_tready <= '0';
+                    m_axis_tvalid <= '0';
+                when FLUSH =>
+                    -- FLUSH should disappear, I'm creating it for now. To be removed in the future
+                    s_axis_tready <= '0';
+                    m_axis_tvalid <= '1';
+                    m_axis_tdata <= (others => '1');
+                    m_axis_tkeep <= (others => '1');
+                    m_axis_tuser <= (others => '1');
+                    m_axis_tlast <= '1';
+
+                    -- First execution
+                    if spike_counter_hit = '1' then
+                        address := 0;
+                        rowIdx := 0;
+                        buffIdx := FLUSH_BUFFER_POSITIONS;
+
+                        flush_ongoing <= '1';
+                    end if;
+
+                    if flush_ongoing = '1' then
+                        -- Update indexes for next iteration
+                        address := address + 1;
+                        if buffIdx = 0 then
+                            -- End of word
+                            rowIdx := rowIdx + 1;
+                            buffIdx := FLUSH_BUFFER_POSITIONS;
+
+                            if rowIdx = SNN_FRAME_HEIGHT - 1 then
+                                -- End of frame
+                                --raise tlast
+                                flush_ongoing <= '0';
+                            end if;
+                        else
+                            --Normal iteration
+                            buffIdx := buffIdx - 1;
+                        end if;
+
+                        -- buffIdx has to decrement following this logic to keep the endianness
+                        flush_out(buffIdx * NEURONS_PER_CLUSTER - 1 downto (buffIdx - 1) * NEURONS_PER_CLUSTER) <= positive_frame(address);
+                    end if;
+
+            end case;
+        end if;
+    end process;
+
 end rtl;
