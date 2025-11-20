@@ -13,7 +13,7 @@ entity neuronMatrix is
         GRID_SIZE_Y : positive := 128;
         GRID_SIZE_X : positive := 128;
         SPIKE_ACCUMULATION_LIMIT : positive := 15000;
-        DECAY_COUNTER_LIMIT : positive := 128;
+        DECAY_COUNTER_LIMIT : positive := 10240;
         MEMBRANE_POTENTIAL_SIZE : positive := 8
     );
     port (
@@ -80,7 +80,7 @@ architecture rtl of neuronMatrix is
 
     type activation_t is array (0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1) of std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
     signal negative_frame : activation_t := (others => (others => '0'));
-    signal positive_frame : activation_t := (others => (others => '1'));
+    signal positive_frame : activation_t := (others => (others => '0'));
     attribute ram_style of negative_frame : signal is "block";
     attribute ram_style of positive_frame : signal is "block";
     signal frame_row : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
@@ -88,11 +88,15 @@ architecture rtl of neuronMatrix is
 
     type state_t is (INTEGRATE, DECAY, FLUSH);
     signal state : state_t := INTEGRATE;
+    signal prev_state : state_t;
 
     constant FLUSH_BUFFER_POSITIONS : natural := (AXIS_TDATA_WIDTH_G/NEURONS_PER_CLUSTER);
     signal flush_out : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
     signal flush_ongoing : std_logic := '0';
-
+    signal flush_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
+    signal flush_buffIdx : natural range 0 to FLUSH_BUFFER_POSITIONS;
+    signal flush_rowIdx : integer range 0 to SNN_FRAME_HEIGHT - 1;
+    signal flush_colIdx : integer range 0 to SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1;
 begin
 
     -- STAGE 1: Read the incoming AXI message. If valid, get the neuron address to route it to. Check which neurons in the cluster to activate.
@@ -242,6 +246,7 @@ begin
     FSM : process (aclk)
     begin
         if rising_edge(aclk) then
+            prev_state <= state;
             if decay_counter_hit = '1' then
                 state <= DECAY;
             elsif spike_counter_hit = '1' then
@@ -253,9 +258,8 @@ begin
     end process;
 
     axiStream : process (aclk)
-        variable buffIdx : natural range 0 to FLUSH_BUFFER_POSITIONS;
-        variable rowIdx : integer range 0 to SNN_FRAME_HEIGHT - 1;
         variable address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
+
     begin
         if rising_edge(aclk) then
             case state is
@@ -268,17 +272,18 @@ begin
                 when FLUSH =>
                     -- FLUSH should disappear, I'm creating it for now. To be removed in the future
                     s_axis_tready <= '0';
-                    m_axis_tvalid <= '1';
-                    m_axis_tdata <= (others => '1');
-                    m_axis_tkeep <= (others => '1');
+                    m_axis_tvalid <= '0';
+                    m_axis_tdata <= (others => '0');
+                    m_axis_tkeep <= (others => '0');
                     m_axis_tuser <= (others => '1');
-                    m_axis_tlast <= '1';
+                    m_axis_tlast <= '0';
 
                     -- First execution
-                    if spike_counter_hit = '1' then
+                    if prev_state /= FLUSH then
                         address := 0;
-                        rowIdx := 0;
-                        buffIdx := FLUSH_BUFFER_POSITIONS;
+                        flush_rowIdx <= 0;
+                        flush_colIdx <= 0;
+                        flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
 
                         flush_ongoing <= '1';
                     end if;
@@ -286,25 +291,35 @@ begin
                     if flush_ongoing = '1' then
                         -- Update indexes for next iteration
                         address := address + 1;
-                        if buffIdx = 0 then
+                        if flush_buffIdx = 0 then
                             -- End of word
-                            rowIdx := rowIdx + 1;
-                            buffIdx := FLUSH_BUFFER_POSITIONS;
+                            flush_colIdx <= flush_colIdx + 1;
+                            flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
+                            m_axis_tdata <= flush_out;
+                            m_axis_tvalid <= '1';
+                            m_axis_tkeep <= (others => '1');
+                            if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
+                                -- End of row
+                                flush_rowIdx <= flush_rowIdx + 1;
+                                flush_colIdx <= 0;
 
-                            if rowIdx = SNN_FRAME_HEIGHT - 1 then
-                                -- End of frame
-                                --raise tlast
-                                flush_ongoing <= '0';
+                                if flush_rowIdx = SNN_FRAME_HEIGHT - 1 then
+                                    -- End of frame
+                                    --raise tlast
+                                    m_axis_tlast <= '1';
+                                    flush_ongoing <= '0';
+                                    address := address - 1;
+                                end if;
                             end if;
                         else
                             --Normal iteration
-                            buffIdx := buffIdx - 1;
+                            flush_buffIdx <= flush_buffIdx - 1;
                         end if;
 
-                        -- buffIdx has to decrement following this logic to keep the endianness
-                        flush_out(buffIdx * NEURONS_PER_CLUSTER - 1 downto (buffIdx - 1) * NEURONS_PER_CLUSTER) <= positive_frame(address);
                     end if;
-
+                    -- flush_buffIdx has to decrement following this logic to keep the endianness
+                    flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= positive_frame(address);
+                    flush_address <= address;
             end case;
         end if;
     end process;
