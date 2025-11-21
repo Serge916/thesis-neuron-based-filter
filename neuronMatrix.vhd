@@ -42,9 +42,9 @@ end entity neuronMatrix;
 architecture rtl of neuronMatrix is
     signal s_axis_tready_signal : std_logic;
     -- X axis is 0 to 15 clusters of 32 elements. 16*32=512
-    signal route_x : unsigned(3 downto 0);
+    -- signal route_x : unsigned(3 downto 0);
     -- Y axis is 0 to 127
-    signal route_y : unsigned(6 downto 0);
+    -- signal route_y : unsigned(6 downto 0);
 
     signal spike_counter : natural range 0 to SPIKE_ACCUMULATION_LIMIT;
     signal spike_counter_hit : std_logic := '0';
@@ -75,21 +75,25 @@ architecture rtl of neuronMatrix is
     signal decay_counter : natural range 0 to DECAY_COUNTER_LIMIT := 0;
     signal decay_counter_hit : std_logic;
 
+    -- Signals for neuron state reading/writing
     signal word_in : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
     signal word_out : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
 
+    -- Signals for spike activation tracking
     type activation_t is array (0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1) of std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
-    signal negative_frame : activation_t := (others => (others => '1'));
+    signal negative_frame : activation_t := (others => (others => '0'));
     signal positive_frame : activation_t := (others => (others => '0'));
     attribute ram_style of negative_frame : signal is "block";
     attribute ram_style of positive_frame : signal is "block";
     signal frame_row : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
     signal spike_out : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
 
-    type state_t is (INTEGRATE, DECAY, FLUSH);
+    -- Signals for FSM
+    type state_t is (INTEGRATE, DECAY, FLUSH, RESET);
     signal state : state_t := INTEGRATE;
     signal prev_state : state_t;
 
+    -- Signals for flush
     constant FLUSH_BUFFER_POSITIONS : natural := (AXIS_TDATA_WIDTH_G/NEURONS_PER_CLUSTER);
     signal flush_out : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
     signal flush_fetch : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0) := (others => '0');
@@ -100,6 +104,10 @@ architecture rtl of neuronMatrix is
     signal flush_colIdx : integer range 0 to SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1;
     signal flush_chanIdx : std_logic;
 
+    -- Signals for reset
+    signal reset_ongoing : std_logic := '0';
+    signal reset_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+    signal reset_chanIdx : std_logic;
     -- Registered AXI output (one-cycle pipeline for flush)
     signal axi_data_reg : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
     signal axi_keep_reg : std_logic_vector((AXIS_TDATA_WIDTH_G/8) - 1 downto 0) := (others => '0');
@@ -117,8 +125,8 @@ begin
                 -- Divide by 4 or 2 shifts right, same as leaving out the 2LSb
                 -- Target dimension is 128, only 7 bits needed. Therefore, get the slice [8:2]
                 -- On the X axis, we divide by 7 (128 in total), as neurons are clustered by EVT2.1
-                route_x <= unsigned(s_axis_tdata(51 downto 48));
-                route_y <= unsigned(s_axis_tdata(40 downto 34));
+                --      route_x <= unsigned(s_axis_tdata(51 downto 48));
+                --      route_y <= unsigned(s_axis_tdata(40 downto 34));
                 memory_address <= to_integer(unsigned(s_axis_tdata(40 downto 34))) * CLUSTERS_PER_ROW + to_integer(unsigned(s_axis_tdata(51 downto 48)));
                 valid_event <= '1';
 
@@ -148,17 +156,19 @@ begin
     readOut : process (aclk)
     begin
         if rising_edge(aclk) then
-            excitation_polarity_d <= excitation_polarity;
-            valid_event_d <= valid_event;
-            memory_address_d <= memory_address;
+            if state = INTEGRATE then
+                excitation_polarity_d <= excitation_polarity;
+                valid_event_d <= valid_event;
+                memory_address_d <= memory_address;
 
-            if valid_event = '1' then
-                if excitation_polarity = POSITIVE_CHANNEL then
-                    word_in <= filter_positive_memory(memory_address);
-                    frame_row <= positive_frame(memory_address);
-                else
-                    word_in <= filter_negative_memory(memory_address);
-                    frame_row <= negative_frame(memory_address);
+                if valid_event = '1' then
+                    if excitation_polarity = POSITIVE_CHANNEL then
+                        word_in <= filter_positive_memory(memory_address);
+                        frame_row <= positive_frame(memory_address);
+                    else
+                        word_in <= filter_negative_memory(memory_address);
+                        frame_row <= negative_frame(memory_address);
+                    end if;
                 end if;
             end if;
         end if;
@@ -171,52 +181,54 @@ begin
         variable spike_accum : integer range 0 to NEURONS_PER_CLUSTER;
     begin
         if rising_edge(aclk) then
-            excitation_polarity_dd <= excitation_polarity_d;
-            valid_event_dd <= valid_event_d;
-            memory_address_dd <= memory_address_d;
+            if state = INTEGRATE then
+                excitation_polarity_dd <= excitation_polarity_d;
+                valid_event_dd <= valid_event_d;
+                memory_address_dd <= memory_address_d;
 
-            word_out <= word_in;
-            -- Write back updated cluster from PREVIOUS cycle's event
-            spike_accum := 0;
-            -- Default value for spike_counter_hit
-            spike_counter_hit <= '0';
-            if valid_event_d = '1' then
-                for i in 0 to NEURONS_PER_CLUSTER - 1 loop
-                    spike(i) := '0';
-                    if active_pixel(i) = '1' then
-                        -- extract this neuron
-                        cell := word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE);
+                word_out <= word_in;
+                -- Write back updated cluster from PREVIOUS cycle's event
+                spike_accum := 0;
+                -- Default value for spike_counter_hit
+                spike_counter_hit <= '0';
+                if valid_event_d = '1' then
+                    for i in 0 to NEURONS_PER_CLUSTER - 1 loop
+                        spike(i) := '0';
+                        if active_pixel(i) = '1' then
+                            -- extract this neuron
+                            cell := word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE);
 
-                        -- If last bit is 1, fire a spike
-                        if cell(MEMBRANE_POTENTIAL_SIZE - 1) = '1' then
-                            spike(i) := '1';
-                            spike_accum := spike_accum + 1;
-                        else
-                            spike(i) := '0';
+                            -- If last bit is 1, fire a spike
+                            if cell(MEMBRANE_POTENTIAL_SIZE - 1) = '1' then
+                                spike(i) := '1';
+                                spike_accum := spike_accum + 1;
+                            else
+                                spike(i) := '0';
+                            end if;
+
+                            -- If it is all 0, initialize it to 1. Else, shift 1 position to the left.
+                            if cell = INITIAL_WORD then
+                                cell := to_unsigned(1, MEMBRANE_POTENTIAL_SIZE);
+                            else
+                                cell := cell sll 1;
+                            end if;
+                            -- report "i=" & integer'image(i) &
+                            --     " cell=" & integer'image(to_integer(cell)) &
+                            --     " spike(i)=" & std_logic'image(spike(i)) &
+                            --     " spike_counter=" & integer'image(spike_counter);
+                            -- write updated cell back into word_out
+                            word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE) <= cell;
                         end if;
-
-                        -- If it is all 0, initialize it to 1. Else, shift 1 position to the left.
-                        if cell = INITIAL_WORD then
-                            cell := to_unsigned(1, MEMBRANE_POTENTIAL_SIZE);
-                        else
-                            cell := cell sll 1;
-                        end if;
-                        report "i=" & integer'image(i) &
-                            " cell=" & integer'image(to_integer(cell)) &
-                            " spike(i)=" & std_logic'image(spike(i)) &
-                            " spike_counter=" & integer'image(spike_counter);
-                        -- write updated cell back into word_out
-                        word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE) <= cell;
+                    end loop;
+                    spike_out <= spike or frame_row;
+                    -- Trigger frame flushing. Check whether there is an operation ongoing with spike_counter_hit. It should be '0' if nothing is happening.
+                    -- if spike_counter >= SPIKE_ACCUMULATION_LIMIT and flush_ongoing = '0' then
+                    if spike_counter >= 3 then
+                        spike_counter_hit <= '1';
+                        spike_counter <= 0;
+                    else
+                        spike_counter <= spike_counter + spike_accum;
                     end if;
-                end loop;
-                spike_out <= spike or frame_row;
-                -- Trigger frame flushing. Check whether there is an operation ongoing with spike_counter_hit. It should be '0' if nothing is happening.
-                -- if spike_counter >= SPIKE_ACCUMULATION_LIMIT and flush_ongoing = '0' then
-                if spike_counter >= 3 then
-                    spike_counter_hit <= '1';
-                    spike_counter <= 0;
-                else
-                    spike_counter <= spike_counter + spike_accum;
                 end if;
             end if;
         end if;
@@ -226,13 +238,44 @@ begin
     writeBack : process (aclk)
     begin
         if rising_edge(aclk) then
-            if valid_event_dd = '1' then
-                if excitation_polarity_dd = POSITIVE_CHANNEL then
-                    filter_positive_memory(memory_address_dd) <= word_out;
-                    positive_frame(memory_address_dd) <= spike_out;
-                else
-                    filter_negative_memory(memory_address_dd) <= word_out;
-                    negative_frame(memory_address_dd) <= spike_out;
+            if state = INTEGRATE then
+                if valid_event_dd = '1' then
+                    if excitation_polarity_dd = POSITIVE_CHANNEL then
+                        filter_positive_memory(memory_address_dd) <= word_out;
+                        positive_frame(memory_address_dd) <= spike_out;
+                    else
+                        filter_negative_memory(memory_address_dd) <= word_out;
+                        negative_frame(memory_address_dd) <= spike_out;
+                    end if;
+                end if;
+            elsif state = RESET then
+                if prev_state = FLUSH then
+                    reset_ongoing <= '1';
+                    reset_address <= 0;
+                    reset_chanIdx <= NEGATIVE_CHANNEL;
+                end if;
+
+                if reset_ongoing = '1' then
+                    reset_address <= reset_address + 1;
+                    if reset_address = (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 then
+                        -- End of memory block
+                        reset_address <= 0;
+                        if reset_chanIdx = NEGATIVE_CHANNEL then
+                            -- Change to second channel
+                            reset_chanIdx <= POSITIVE_CHANNEL;
+                        else
+                            -- Finished resetting
+                            reset_ongoing <= '0';
+                        end if;
+                    end if;
+
+                    if reset_chanIdx = NEGATIVE_CHANNEL then
+                        filter_negative_memory(reset_address) <= (others => '0');
+                        negative_frame(reset_address) <= (others => '0');
+                    else
+                        filter_positive_memory(reset_address) <= (others => '0');
+                        positive_frame(reset_address) <= (others => '0');
+                    end if;
                 end if;
             end if;
         end if;
@@ -253,24 +296,38 @@ begin
     end process;
 
     -- TODO: Rework this whole thing
-    FSM : process (aclk)
+    FSM : process (aclk, aresetn)
     begin
         if rising_edge(aclk) then
             prev_state <= state;
             state <= state;
             case state is
                 when INTEGRATE =>
-                    if decay_counter_hit = '1' then
+                    if aresetn = '0' then
+                        -- state <= RESET;
+                    elsif decay_counter_hit = '1' then
                         state <= DECAY;
                     elsif spike_counter_hit = '1' then
                         state <= FLUSH;
                     end if;
                 when FLUSH =>
-                    if flush_ongoing = '0' and prev_state = FLUSH then
-                        state <= INTEGRATE;
+                    if aresetn = '0' then
+                        state <= RESET;
+                    elsif flush_ongoing = '0' and prev_state = FLUSH then
+                        state <= RESET;
                     end if;
                 when DECAY =>
-                    state <= DECAY;
+                    if aresetn = '0' then
+                        state <= RESET;
+                    else
+                        state <= DECAY;
+                    end if;
+                when RESET =>
+                    if reset_ongoing = '0' and prev_state = RESET then
+                        state <= INTEGRATE;
+                    else
+                        state <= RESET;
+                    end if;
             end case;
         end if;
     end process;
@@ -303,6 +360,9 @@ begin
 
                     -- DECAY: no AXI output, just stall input
                 when DECAY =>
+                    s_axis_tready <= '0';
+                    -- DECAY: no AXI output, just stall input
+                when RESET =>
                     s_axis_tready <= '0';
 
                     -- FLUSH: walk through frame and emit AXI words
