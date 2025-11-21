@@ -108,6 +108,10 @@ architecture rtl of neuronMatrix is
     signal reset_ongoing : std_logic := '0';
     signal reset_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
     signal reset_chanIdx : std_logic;
+    -- Signals for decay
+    signal decay_ongoing : std_logic := '0';
+    signal decay_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+    signal decay_chanIdx : std_logic;
     -- Registered AXI output (one-cycle pipeline for flush)
     signal axi_data_reg : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
     signal axi_keep_reg : std_logic_vector((AXIS_TDATA_WIDTH_G/8) - 1 downto 0) := (others => '0');
@@ -238,46 +242,60 @@ begin
     writeBack : process (aclk)
     begin
         if rising_edge(aclk) then
-            if state = INTEGRATE then
-                if valid_event_dd = '1' then
-                    if excitation_polarity_dd = POSITIVE_CHANNEL then
-                        filter_positive_memory(memory_address_dd) <= word_out;
-                        positive_frame(memory_address_dd) <= spike_out;
-                    else
-                        filter_negative_memory(memory_address_dd) <= word_out;
-                        negative_frame(memory_address_dd) <= spike_out;
-                    end if;
-                end if;
-            elsif state = RESET then
-                if prev_state = FLUSH then
-                    reset_ongoing <= '1';
-                    reset_address <= 0;
-                    reset_chanIdx <= NEGATIVE_CHANNEL;
-                end if;
-
-                if reset_ongoing = '1' then
-                    reset_address <= reset_address + 1;
-                    if reset_address = (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 then
-                        -- End of memory block
-                        reset_address <= 0;
-                        if reset_chanIdx = NEGATIVE_CHANNEL then
-                            -- Change to second channel
-                            reset_chanIdx <= POSITIVE_CHANNEL;
+            case state is
+                when INTEGRATE =>
+                    if valid_event_dd = '1' then
+                        if excitation_polarity_dd = POSITIVE_CHANNEL then
+                            filter_positive_memory(memory_address_dd) <= word_out;
+                            positive_frame(memory_address_dd) <= spike_out;
                         else
-                            -- Finished resetting
-                            reset_ongoing <= '0';
+                            filter_negative_memory(memory_address_dd) <= word_out;
+                            negative_frame(memory_address_dd) <= spike_out;
                         end if;
                     end if;
-
-                    if reset_chanIdx = NEGATIVE_CHANNEL then
-                        filter_negative_memory(reset_address) <= (others => '0');
-                        negative_frame(reset_address) <= (others => '0');
-                    else
-                        filter_positive_memory(reset_address) <= (others => '0');
-                        positive_frame(reset_address) <= (others => '0');
+                when RESET =>
+                    if prev_state = FLUSH then
+                        reset_ongoing <= '1';
+                        reset_address <= 0;
+                        reset_chanIdx <= NEGATIVE_CHANNEL;
                     end if;
-                end if;
-            end if;
+
+                    if reset_ongoing = '1' then
+                        reset_address <= reset_address + 1;
+                        if reset_address = (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 then
+                            -- End of memory block
+                            reset_address <= 0;
+                            if reset_chanIdx = NEGATIVE_CHANNEL then
+                                -- Change to second channel
+                                reset_chanIdx <= POSITIVE_CHANNEL;
+                            else
+                                -- Finished resetting
+                                reset_ongoing <= '0';
+                            end if;
+                        end if;
+
+                        if reset_chanIdx = NEGATIVE_CHANNEL then
+                            filter_negative_memory(reset_address) <= (others => '0');
+                            negative_frame(reset_address) <= (others => '0');
+                        else
+                            filter_positive_memory(reset_address) <= (others => '0');
+                            positive_frame(reset_address) <= (others => '0');
+                        end if;
+                    end if;
+                when DECAY =>
+                    if prev_state = INTEGRATE then
+                        decay_ongoing <= '1';
+                        decay_address <= 0;
+                        decay_chanIdx <= NEGATIVE_CHANNEL;
+                    end if;
+
+                    if decay_ongoing = '1' then
+                        -- Nothing for now
+                        decay_ongoing <= '0';
+                    end if;
+                when FLUSH =>
+                    --Nothing. Here to make the compiler happy.
+            end case;
         end if;
     end process;
 
@@ -317,8 +335,8 @@ begin
                         state <= RESET;
                     end if;
                 when DECAY =>
-                    if aresetn = '0' then
-                        state <= RESET;
+                    if decay_ongoing = '0' and prev_state = DECAY then
+                        state <= INTEGRATE;
                     else
                         state <= DECAY;
                     end if;
