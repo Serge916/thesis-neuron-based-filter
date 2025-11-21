@@ -8,7 +8,8 @@ use ieee.std_logic_textio.all;
 entity eventStream is
   generic (
     G_FILE : string := "/home/sergio/Projects/thesis/eventFilter/eventFilter.srcs/sources_1/new/in_evt_file.evt";
-    G_TCLK : time := 10 ns
+    G_TCLK : time := 10 ns;
+    O_FILE : string := "/home/sergio/Projects/thesis/eventFilter/eventFilter.srcs/sources_1/new/output.txt"
   );
 end entity;
 
@@ -37,7 +38,7 @@ architecture sim of eventStream is
   signal m_axis_tuser : std_logic_vector(C_TUSER_W - 1 downto 0);
 
   file data_f : text open read_mode is G_FILE;
-  file log_f : text open write_mode is "tb_log.txt";
+  file log_f : text open write_mode is O_FILE;
 begin
   -- clock & reset
   aclk <= not aclk after G_TCLK/2;
@@ -107,19 +108,44 @@ begin
   end process;
 
   -- monitor DUT output
-  p_sink : process (aclk)
-    variable L : line;
+  p_sink : process
+    variable L_row : line; -- for log file (row-based, binary)
+    variable L_con : line; -- for console (per word, hex)
   begin
-    if rising_edge(aclk) then
+    -- wait for reset
+    wait until aresetn = '1';
+
+    L_row := null;
+
+    while true loop
+      wait until rising_edge(aclk);
+
       if m_axis_tvalid = '1' and m_axis_tready = '1' then
-        hwrite(L, m_axis_tdata);
+        ----------------------------------------------------------------
+        -- 1) CONSOLE: print EVERY WORD (hex, one line per beat)
+        ----------------------------------------------------------------
+        L_con := null; -- new line each beat
+        hwrite(L_con, m_axis_tdata); -- hex output
         if m_axis_tlast = '1' then
-          write(L, string'("  (TLAST)"));
+          write(L_con, string'("  (TLAST)"));
         end if;
-        writeline(output, L);
-        writeline(log_f, L);
+        writeline(output, L_con); -- print every beat
+
+        ----------------------------------------------------------------
+        -- 2) LOG FILE: keep current behavior (one row per line, binary)
+        ----------------------------------------------------------------
+        -- accumulate binary words for this row
+        -- (add separator if you like)
+        -- write(L_row, string'(" "));
+        write(L_row, m_axis_tdata); -- binary
+
+        -- end of row?
+        if m_axis_tlast = '1' then
+          writeline(log_f, L_row); -- write full row to file
+          L_row := null; -- reset for next row
+        end if;
       end if;
-    end if;
+    end loop;
   end process;
 
   -- DUT
