@@ -52,14 +52,9 @@ architecture rtl of neuronMatrix is
 
     -- Per message, 8 Processing Elements are needed
     signal active_pixel : std_logic_vector(7 downto 0);
+    signal active_pixel_d : std_logic_vector(7 downto 0);
 
-    type filter_memory_t is array (0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1) of unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
-    constant INITIAL_WORD : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0) := (others => '0');
-    signal filter_negative_memory : filter_memory_t := (others => INITIAL_WORD);
-    signal filter_positive_memory : filter_memory_t := (others => INITIAL_WORD);
-    attribute ram_style : string;
-    attribute ram_style of filter_negative_memory : signal is "block";
-    attribute ram_style of filter_positive_memory : signal is "block";
+    constant INITIAL_WORD : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0) := (others => '0');
 
     signal valid_event : std_logic;
     signal valid_event_d : std_logic;
@@ -118,7 +113,7 @@ architecture rtl of neuronMatrix is
     signal positive_act_dina : std_logic_vector(7 downto 0) := (others => '0');
     signal positive_act_addrb : std_logic_vector(10 downto 0) := (others => '0');
     signal positive_act_doutb : std_logic_vector(7 downto 0) := (others => '0');
-    signal positive_act_enb : std_logic := '1';
+    signal positive_act_enb : std_logic := '0';
     signal positive_act_web : std_logic_vector(0 downto 0) := (others => '0');
     signal positive_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
     -- Negative activation frame signals
@@ -128,7 +123,7 @@ architecture rtl of neuronMatrix is
     signal negative_act_dina : std_logic_vector(7 downto 0) := (others => '0');
     signal negative_act_addrb : std_logic_vector(10 downto 0) := (others => '0');
     signal negative_act_doutb : std_logic_vector(7 downto 0) := (others => '0');
-    signal negative_act_enb : std_logic := '1';
+    signal negative_act_enb : std_logic := '0';
     signal negative_act_web : std_logic_vector(0 downto 0) := (others => '0');
     signal negative_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
     -- Negative neuron state signals
@@ -138,7 +133,7 @@ architecture rtl of neuronMatrix is
     signal negative_state_dina : std_logic_vector(63 downto 0) := (others => '0');
     signal negative_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
     signal negative_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
-    signal negative_state_enb : std_logic := '1';
+    signal negative_state_enb : std_logic := '0';
     signal negative_state_web : std_logic_vector(0 downto 0) := (others => '0');
     signal negative_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
     -- Negative neuron state signals
@@ -148,7 +143,7 @@ architecture rtl of neuronMatrix is
     signal positive_state_dina : std_logic_vector(63 downto 0) := (others => '0');
     signal positive_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
     signal positive_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
-    signal positive_state_enb : std_logic := '1';
+    signal positive_state_enb : std_logic := '0';
     signal positive_state_web : std_logic_vector(0 downto 0) := (others => '0');
     signal positive_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
 
@@ -269,10 +264,14 @@ begin
                             excitation_polarity <= POSITIVE_CHANNEL;
                             positive_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_state_addrb'length));
                             positive_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
+                            positive_state_enb <= '1';
+                            positive_act_enb <= '1';
                         else
                             excitation_polarity <= NEGATIVE_CHANNEL;
                             negative_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_state_addrb'length));
                             negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_act_addrb'length));
+                            negative_state_enb <= '1';
+                            negative_act_enb <= '1';
                         end if;
 
                         active_pixel(7) <= or_reduce(s_axis_tdata(31 downto 28));
@@ -286,6 +285,10 @@ begin
 
                     else
                         valid_event <= '0';
+                        negative_state_enb <= '0';
+                        positive_state_enb <= '0';
+                        positive_act_enb <= '0';
+                        negative_act_enb <= '0';
                     end if;
 
                 when FLUSH =>
@@ -303,6 +306,7 @@ begin
                 excitation_polarity_d <= excitation_polarity;
                 valid_event_d <= valid_event;
                 memory_address_d <= memory_address;
+                active_pixel_d <= active_pixel;
 
                 if valid_event = '1' then
                     if excitation_polarity = POSITIVE_CHANNEL then
@@ -332,7 +336,7 @@ begin
                 if valid_event_d = '1' then
                     for i in 0 to NEURONS_PER_CLUSTER - 1 loop
                         spike(i) := '0';
-                        if active_pixel(i) = '1' then
+                        if active_pixel_d(i) = '1' then
                             -- extract this neuron
                             cell := unsigned(word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE));
 
@@ -361,7 +365,7 @@ begin
                     spike_out <= spike or frame_row;
                     -- Trigger frame flushing. Check whether there is an operation ongoing with spike_counter_hit. It should be '0' if nothing is happening.
                     -- if spike_counter >= SPIKE_ACCUMULATION_LIMIT and flush_ongoing = '0' then
-                    if spike_counter >= 3 then
+                    if spike_counter >= 5 then
                         spike_counter_hit <= '1';
                         spike_counter <= 0;
                     else
@@ -376,7 +380,12 @@ begin
             positive_act_ena <= '0';
             case state is
                 when INTEGRATE =>
+                    negative_act_ena <= '0';
+                    positive_act_ena <= '0';
+                    positive_state_ena <= '0';
+                    negative_state_ena <= '0';
                     if valid_event_dd = '1' then
+
                         if excitation_polarity_dd = POSITIVE_CHANNEL then
                             positive_state_addra <= std_logic_vector(to_unsigned(memory_address_dd, positive_state_addra'length));
                             positive_state_dina <= word_out;
@@ -396,6 +405,11 @@ begin
                         end if;
                     end if;
                 when RESET =>
+                    negative_act_ena <= '0';
+                    positive_act_ena <= '0';
+                    positive_state_ena <= '0';
+                    negative_state_ena <= '0';
+
                     if prev_state = FLUSH then
                         reset_ongoing <= '1';
                         reset_address <= 0;
@@ -446,7 +460,11 @@ begin
                         decay_ongoing <= '0';
                     end if;
                 when FLUSH =>
-                    --Nothing. Here to make the compiler happy.
+                    -- Make sure nothing is written into memory in this stage.
+                    negative_act_ena <= '0';
+                    positive_act_ena <= '0';
+                    positive_state_ena <= '0';
+                    negative_state_ena <= '0';
             end case;
         end if;
 
@@ -495,6 +513,7 @@ begin
                         flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
                         flush_chanIdx <= NEGATIVE_CHANNEL;
                         flush_ongoing <= '1';
+                        negative_act_enb <= '1';
 
                         -- Ongoing FLUSH
                     elsif flush_ongoing = '1' then
@@ -521,9 +540,12 @@ begin
                                         -- Last frame of the flush 
                                         axi_last_reg <= '1';
                                         flush_ongoing <= '0';
+                                        positive_act_enb <= '0';
                                     else
                                         -- If not last frame of the flush, change channel
                                         flush_chanIdx <= POSITIVE_CHANNEL;
+                                        positive_act_enb <= '1';
+                                        negative_act_enb <= '0';
                                     end if;
                                 else
                                     -- If not last row of frame, increase one position
