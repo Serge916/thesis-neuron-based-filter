@@ -77,8 +77,8 @@ architecture rtl of neuronMatrix is
     signal decay_counter_hit : std_logic;
 
     -- Signals for neuron state reading/writing
-    signal word_in : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
-    signal word_out : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
+    signal word_in : std_logic_vector(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
+    signal word_out : std_logic_vector(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
 
     -- Signals for spike activation tracking
     signal frame_row : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
@@ -131,6 +131,16 @@ architecture rtl of neuronMatrix is
     signal negative_act_enb : std_logic := '1';
     signal negative_act_web : std_logic_vector(0 downto 0) := (others => '0');
     signal negative_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
+    -- Negative neuron state signals
+    signal negative_state_ena : std_logic := '0';
+    signal negative_state_wea : std_logic_vector(0 downto 0) := (others => '1');
+    signal negative_state_addra : std_logic_vector(10 downto 0) := (others => '0');
+    signal negative_state_dina : std_logic_vector(63 downto 0) := (others => '0');
+    signal negative_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
+    signal negative_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
+    signal negative_state_enb : std_logic := '1';
+    signal negative_state_web : std_logic_vector(0 downto 0) := (others => '0');
+    signal negative_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
 
     component blk_mem_activation
         port (
@@ -143,6 +153,20 @@ architecture rtl of neuronMatrix is
             enb : in std_logic;
             addrb : in std_logic_vector(10 downto 0);
             doutb : out std_logic_vector(7 downto 0)
+        );
+    end component;
+
+    component blk_mem_state_filter
+        port (
+            clka : in std_logic;
+            ena : in std_logic;
+            wea : in std_logic_vector(0 downto 0);
+            addra : in std_logic_vector(10 downto 0);
+            dina : in std_logic_vector(63 downto 0);
+            clkb : in std_logic;
+            enb : in std_logic;
+            addrb : in std_logic_vector(10 downto 0);
+            doutb : out std_logic_vector(63 downto 0)
         );
     end component;
 
@@ -178,6 +202,21 @@ begin
         doutb => negative_act_doutb
     );
 
+    negative_state : blk_mem_state_filter
+    port map(
+        clka => aclk,
+        ena => negative_state_ena,
+        wea => negative_state_wea,
+        addra => negative_state_addra,
+        dina => negative_state_dina,
+        clkb => aclk,
+        enb => negative_state_enb,
+        -- web => negative_state_web,
+        -- dinb => negative_state_dinb,
+        addrb => negative_state_addrb,
+        doutb => negative_state_doutb
+    );
+
     pipeline : process (aclk, aresetn)
         variable cell : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
         variable spike : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
@@ -197,7 +236,8 @@ begin
                         --      route_y <= unsigned(s_axis_tdata(40 downto 34));
                         readOut_memory_address := to_integer(unsigned(s_axis_tdata(40 downto 34))) * CLUSTERS_PER_ROW + to_integer(unsigned(s_axis_tdata(51 downto 48)));
                         memory_address <= readOut_memory_address;
-                        negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
+                        negative_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_state_addrb'length));
+                        negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_act_addrb'length));
                         positive_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
                         valid_event <= '1';
 
@@ -239,10 +279,10 @@ begin
 
                 if valid_event = '1' then
                     if excitation_polarity = POSITIVE_CHANNEL then
-                        word_in <= filter_positive_memory(memory_address);
+                        word_in <= std_logic_vector(filter_positive_memory(memory_address));
                         frame_row <= positive_act_doutb;
                     else
-                        word_in <= filter_negative_memory(memory_address);
+                        word_in <= negative_state_doutb;
                         frame_row <= negative_act_doutb;
                     end if;
                 end if;
@@ -267,7 +307,7 @@ begin
                         spike(i) := '0';
                         if active_pixel(i) = '1' then
                             -- extract this neuron
-                            cell := word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE);
+                            cell := unsigned(word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE));
 
                             -- If last bit is 1, fire a spike
                             if cell(MEMBRANE_POTENTIAL_SIZE - 1) = '1' then
@@ -288,7 +328,7 @@ begin
                             --     " spike(i)=" & std_logic'image(spike(i)) &
                             --     " spike_counter=" & integer'image(spike_counter);
                             -- write updated cell back into word_out
-                            word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE) <= cell;
+                            word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE) <= std_logic_vector(cell);
                         end if;
                     end loop;
                     spike_out <= spike or frame_row;
@@ -311,12 +351,15 @@ begin
                 when INTEGRATE =>
                     if valid_event_dd = '1' then
                         if excitation_polarity_dd = POSITIVE_CHANNEL then
-                            filter_positive_memory(memory_address_dd) <= word_out;
+                            filter_positive_memory(memory_address_dd) <= unsigned(word_out);
                             positive_act_addra <= std_logic_vector(to_unsigned(memory_address_dd, positive_act_addra'length));
                             positive_act_dina <= spike_out;
                             positive_act_ena <= '1';
                         else
-                            filter_negative_memory(memory_address_dd) <= word_out;
+                            negative_state_addra <= std_logic_vector(to_unsigned(memory_address_dd, negative_state_addra'length));
+                            negative_state_dina <= word_out;
+                            negative_state_ena <= '1';
+
                             negative_act_addra <= std_logic_vector(to_unsigned(memory_address_dd, negative_act_addra'length));
                             negative_act_dina <= spike_out;
                             negative_act_ena <= '1';
@@ -344,7 +387,10 @@ begin
                         end if;
 
                         if reset_chanIdx = NEGATIVE_CHANNEL then
-                            filter_negative_memory(reset_address) <= (others => '0');
+                            negative_state_addra <= std_logic_vector(to_unsigned(reset_address, negative_state_addra'length));
+                            negative_state_dina <= (others => '0');
+                            negative_state_ena <= '1';
+
                             negative_act_addra <= std_logic_vector(to_unsigned(reset_address, negative_act_addra'length));
                             negative_act_dina <= (others => '0');
                             negative_act_ena <= '1';
