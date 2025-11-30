@@ -81,9 +81,6 @@ architecture rtl of neuronMatrix is
     signal word_out : unsigned(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
 
     -- Signals for spike activation tracking
-    type activation_t is array (0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1) of std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
-    signal negative_frame : activation_t := (others => (others => '0'));
-    attribute ram_style of negative_frame : signal is "block";
     signal frame_row : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
     signal spike_out : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
 
@@ -95,7 +92,6 @@ architecture rtl of neuronMatrix is
     -- Signals for flush
     constant FLUSH_BUFFER_POSITIONS : natural := (AXIS_TDATA_WIDTH_G/NEURONS_PER_CLUSTER);
     signal flush_out : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
-    signal flush_fetch : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0) := (others => '0');
     signal flush_ongoing : std_logic := '0';
     signal flush_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
     signal flush_buffIdx : natural range 0 to FLUSH_BUFFER_POSITIONS;
@@ -112,9 +108,6 @@ architecture rtl of neuronMatrix is
     signal decay_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
     signal decay_chanIdx : std_logic;
     -- Registered AXI output (one-cycle pipeline for flush)
-    signal axi_data_reg : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
-    signal axi_keep_reg : std_logic_vector((AXIS_TDATA_WIDTH_G/8) - 1 downto 0) := (others => '0');
-    signal axi_user_reg : std_logic_vector(AXIS_TUSER_WIDTH_G - 1 downto 0) := (others => '0');
     signal axi_last_reg : std_logic := '0';
     signal axi_valid_reg : std_logic := '0';
 
@@ -128,6 +121,16 @@ architecture rtl of neuronMatrix is
     signal positive_act_enb : std_logic := '1';
     signal positive_act_web : std_logic_vector(0 downto 0) := (others => '0');
     signal positive_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
+    -- Negative activation frame signals
+    signal negative_act_ena : std_logic := '0';
+    signal negative_act_wea : std_logic_vector(0 downto 0) := (others => '1');
+    signal negative_act_addra : std_logic_vector(10 downto 0) := (others => '0');
+    signal negative_act_dina : std_logic_vector(7 downto 0) := (others => '0');
+    signal negative_act_addrb : std_logic_vector(10 downto 0) := (others => '0');
+    signal negative_act_doutb : std_logic_vector(7 downto 0) := (others => '0');
+    signal negative_act_enb : std_logic := '1';
+    signal negative_act_web : std_logic_vector(0 downto 0) := (others => '0');
+    signal negative_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
 
     component blk_mem_activation
         port (
@@ -160,13 +163,26 @@ begin
         doutb => positive_act_doutb
     );
 
+    negative_frame : blk_mem_activation
+    port map(
+        clka => aclk,
+        ena => negative_act_ena,
+        wea => negative_act_wea,
+        addra => negative_act_addra,
+        dina => negative_act_dina,
+        clkb => aclk,
+        enb => negative_act_enb,
+        -- web => negative_act_web,
+        -- dinb => negative_act_dinb,
+        addrb => negative_act_addrb,
+        doutb => negative_act_doutb
+    );
+
     pipeline : process (aclk, aresetn)
         variable cell : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
         variable spike : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
         variable spike_accum : integer range 0 to NEURONS_PER_CLUSTER;
         variable readOut_memory_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
-        variable flush_word_v : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0);
-        variable is_last_word : boolean;
     begin
         -- STAGE 1: Read the incoming AXI message. If valid, get the neuron address to route it to. Check which neurons in the cluster to activate.
         if rising_edge(aclk) then
@@ -181,6 +197,7 @@ begin
                         --      route_y <= unsigned(s_axis_tdata(40 downto 34));
                         readOut_memory_address := to_integer(unsigned(s_axis_tdata(40 downto 34))) * CLUSTERS_PER_ROW + to_integer(unsigned(s_axis_tdata(51 downto 48)));
                         memory_address <= readOut_memory_address;
+                        negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
                         positive_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
                         valid_event <= '1';
 
@@ -226,7 +243,7 @@ begin
                         frame_row <= positive_act_doutb;
                     else
                         word_in <= filter_negative_memory(memory_address);
-                        frame_row <= negative_frame(memory_address);
+                        frame_row <= negative_act_doutb;
                     end if;
                 end if;
             end if;
@@ -300,7 +317,9 @@ begin
                             positive_act_ena <= '1';
                         else
                             filter_negative_memory(memory_address_dd) <= word_out;
-                            negative_frame(memory_address_dd) <= spike_out;
+                            negative_act_addra <= std_logic_vector(to_unsigned(memory_address_dd, negative_act_addra'length));
+                            negative_act_dina <= spike_out;
+                            negative_act_ena <= '1';
                         end if;
                     end if;
                 when RESET =>
@@ -326,7 +345,9 @@ begin
 
                         if reset_chanIdx = NEGATIVE_CHANNEL then
                             filter_negative_memory(reset_address) <= (others => '0');
-                            negative_frame(reset_address) <= (others => '0');
+                            negative_act_addra <= std_logic_vector(to_unsigned(reset_address, negative_act_addra'length));
+                            negative_act_dina <= (others => '0');
+                            negative_act_ena <= '1';
                         else
                             filter_positive_memory(reset_address) <= (others => '0');
                             positive_act_addra <= std_logic_vector(to_unsigned(reset_address, positive_act_addra'length));
@@ -351,140 +372,23 @@ begin
         end if;
 
         -- AXI Stream Controller part
-
-        -- if rising_edge(aclk) then
-        --     -- Default: drive AXI outputs from registered values
-        --     -- m_axis_tdata <= axi_data_reg;
-        --     -- m_axis_tkeep <= axi_keep_reg;
-        --     -- m_axis_tuser <= axi_user_reg;
-        --     -- m_axis_tlast <= axi_last_reg;
-        --     -- m_axis_tvalid <= axi_valid_reg;
-
-        --     -- By default, no new word this cycle
-        --     -- axi_valid_reg <= '0';
-        --     -- axi_last_reg <= '0';
-        --     m_axis_tvalid <= '0';
-        --     m_axis_tlast <= '0';
-
-        --     -- Start with the previous flush_out content
-        --     flush_word_v := flush_out;
-        --     is_last_word := false;
-
-        --     case state is
-        --             -- INTEGRATE: normal operation, no flush output
-        --         when INTEGRATE =>
-        --             s_axis_tready <= '1';
-
-        --             -- DECAY: no AXI output, just stall input
-        --         when DECAY =>
-        --             s_axis_tready <= '0';
-        --             -- DECAY: no AXI output, just stall input
-        --         when RESET =>
-        --             s_axis_tready <= '0';
-
-        --             -- FLUSH: walk through frame and emit AXI words
-        --         when FLUSH =>
-        --             s_axis_tready <= '0';
-
-        --             -- First FLUSH cycle: initialise indices and start negative channel
-        --             if prev_state /= FLUSH then
-        --                 flush_address <= 0;
-        --                 flush_rowIdx <= 0;
-        --                 flush_colIdx <= 0;
-        --                 flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
-        --                 flush_chanIdx <= NEGATIVE_CHANNEL;
-        --                 flush_ongoing <= '1';
-
-        --                 -- First read (will be used next cycle)
-        --                 flush_fetch <= negative_frame(0);
-
-        --                 -- Ongoing FLUSH
-        --             elsif flush_ongoing = '1' then
-        --                 -- 1) Assemble current word slice into variable flush_word_v
-        --                 --    flush_fetch is the data read in the previous cycle.
-        --                 flush_word_v((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) := flush_fetch;
-
-        --                 -- 2) Check if this slice completes the AXI word
-        --                 if flush_buffIdx = 0 then
-        --                     -- Word fully assembled in flush_word_v:
-        --                     --   - register it into axi_*_reg
-        --                     --   - it will appear on m_axis_* in the NEXT cycle
-        --                     -- axi_data_reg <= flush_word_v;
-        --                     -- axi_keep_reg <= (others => '1');
-        --                     -- axi_user_reg <= (others => '1');
-        --                     -- axi_valid_reg <= '1';
-
-        --                     m_axis_tdata <= flush_out;
-        --                     m_axis_tkeep <= (others => '1');
-        --                     m_axis_tuser <= (others => '1');
-        --                     m_axis_tvalid <= '1';
-
-        --                     -- Is this the last word of the last row of the positive channel?
-        --                     if (flush_rowIdx = SNN_FRAME_HEIGHT - 1) and
-        --                         (flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1) and
-        --                         (flush_chanIdx = POSITIVE_CHANNEL) then
-        --                         axi_last_reg <= '1';
-        --                         flush_ongoing <= '0';
-        --                     end if;
-
-        --                     -- 3) Update column / row / channel indices for NEXT word
-        --                     if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
-        --                         -- End of row
-        --                         flush_colIdx <= 0;
-        --                         if flush_rowIdx = SNN_FRAME_HEIGHT - 1 then
-        --                             -- End of frame for this channel
-        --                             flush_rowIdx <= 0;
-        --                             if flush_chanIdx = NEGATIVE_CHANNEL then
-        --                                 flush_chanIdx <= POSITIVE_CHANNEL;
-        --                             end if;
-        --                         else
-        --                             flush_rowIdx <= flush_rowIdx + 1;
-        --                         end if;
-        --                     else
-        --                         flush_colIdx <= flush_colIdx + 1;
-        --                     end if;
-
-        --                     -- Reset buffer index for next word
-        --                     flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
-
-        --                 else
-        --                     -- Still filling the current word: just decrement buffer index.
-        --                     flush_buffIdx <= flush_buffIdx - 1;
-        --                 end if;
-
-        --                 -- 4) Advance memory address and schedule next fetch.
-        --                 --    Address wraps at end of frame memory.
-        --                 if flush_address = (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 then
-        --                     flush_address <= 0;
-        --                 else
-        --                     flush_address <= flush_address + 1;
-        --                 end if;
-
-        --                 if flush_chanIdx = NEGATIVE_CHANNEL then
-        --                     flush_fetch <= negative_frame(flush_address);
-        --                 else
-        --                     positive_act_addrb <= std_logic_vector(to_unsigned(flush_address, positive_act_addrb'length));
-        --                     flush_fetch <= positive_act_doutb;
-        --                 end if;
-
-        --             end if; -- flush_ongoing = '1'
-        --     end case;
-
-        --     -- Finally, commit the assembled flush word to the signal.
-        --     flush_out <= flush_word_v;
-        -- end if;
         if rising_edge(aclk) then
-            -- Default: drive AXI outputs from registered values
-            -- axi_data_reg <= (others => '0');
+            -- AXI Valid and AXI last are driven with 1 clock difference
             axi_valid_reg <= '0';
             axi_last_reg <= '0';
-
             m_axis_tlast <= axi_last_reg;
             m_axis_tvalid <= axi_valid_reg;
             -- If axi_valid = 1, the data is already is flush_out
             if axi_valid_reg = '1' then
                 m_axis_tdata <= flush_out;
             end if;
+
+            -- The logic for AXI ready must be yet implemented
+            -- if m_axis_tready = '1' then ...
+
+            -- The rest of the AXI signals are not used
+            m_axis_tkeep <= (others => '1');
+            m_axis_tuser <= (others => '1');
 
             case state is
                     -- INTEGRATE: normal operation, no flush output
@@ -504,33 +408,29 @@ begin
 
                     -- First FLUSH cycle: initialise indices and start negative channel
                     if prev_state /= FLUSH then
-                        is_last_word := false;
                         flush_address <= 0;
                         positive_act_addrb <= (others => '0');
+                        negative_act_addrb <= (others => '0');
                         flush_rowIdx <= 0;
                         flush_colIdx <= 0;
                         flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
                         flush_chanIdx <= NEGATIVE_CHANNEL;
                         flush_ongoing <= '1';
 
-                        -- First read (will be used next cycle)
-                        flush_fetch <= negative_frame(0);
-
                         -- Ongoing FLUSH
                     elsif flush_ongoing = '1' then
-                        -- 1) calculate address
+                        -- 1) calculate new address
                         if flush_chanIdx = POSITIVE_CHANNEL then
                             positive_act_addrb <= std_logic_vector(unsigned(positive_act_addrb) + 1);
                         else
-                            flush_address <= flush_address + 1;
-                            -- positive_act_addrb <= std_logic_vector(to_unsigned(flush_address, positive_act_addrb'length));
+                            negative_act_addrb <= std_logic_vector(unsigned(negative_act_addrb) + 1);
                         end if;
+
                         -- 1b) check whether something special happens
                         if flush_buffIdx = 0 then
                             -- Final part of the word
                             flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
                             axi_valid_reg <= '1';
-                            axi_data_reg <= flush_out;
 
                             if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
                                 -- Last column of the row
@@ -544,7 +444,6 @@ begin
                                         flush_ongoing <= '0';
                                     else
                                         -- If not last frame of the flush, change channel
-                                        positive_act_addrb <= (others => '0');
                                         flush_chanIdx <= POSITIVE_CHANNEL;
                                     end if;
                                 else
@@ -564,7 +463,7 @@ begin
                         if flush_chanIdx = POSITIVE_CHANNEL then
                             flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= positive_act_doutb;
                         else
-                            flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= negative_frame(flush_address);
+                            flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= negative_act_doutb;
                         end if;
                     end if; -- flush_ongoing = '1'
             end case;
