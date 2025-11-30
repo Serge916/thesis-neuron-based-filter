@@ -141,6 +141,16 @@ architecture rtl of neuronMatrix is
     signal negative_state_enb : std_logic := '1';
     signal negative_state_web : std_logic_vector(0 downto 0) := (others => '0');
     signal negative_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
+    -- Negative neuron state signals
+    signal positive_state_ena : std_logic := '0';
+    signal positive_state_wea : std_logic_vector(0 downto 0) := (others => '1');
+    signal positive_state_addra : std_logic_vector(10 downto 0) := (others => '0');
+    signal positive_state_dina : std_logic_vector(63 downto 0) := (others => '0');
+    signal positive_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
+    signal positive_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
+    signal positive_state_enb : std_logic := '1';
+    signal positive_state_web : std_logic_vector(0 downto 0) := (others => '0');
+    signal positive_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
 
     component blk_mem_activation
         port (
@@ -217,6 +227,21 @@ begin
         doutb => negative_state_doutb
     );
 
+    positive_state : blk_mem_state_filter
+    port map(
+        clka => aclk,
+        ena => positive_state_ena,
+        wea => positive_state_wea,
+        addra => positive_state_addra,
+        dina => positive_state_dina,
+        clkb => aclk,
+        enb => positive_state_enb,
+        -- web => positive_state_web,
+        -- dinb => positive_state_dinb,
+        addrb => positive_state_addrb,
+        doutb => positive_state_doutb
+    );
+
     pipeline : process (aclk, aresetn)
         variable cell : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
         variable spike : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
@@ -236,16 +261,18 @@ begin
                         --      route_y <= unsigned(s_axis_tdata(40 downto 34));
                         readOut_memory_address := to_integer(unsigned(s_axis_tdata(40 downto 34))) * CLUSTERS_PER_ROW + to_integer(unsigned(s_axis_tdata(51 downto 48)));
                         memory_address <= readOut_memory_address;
-                        negative_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_state_addrb'length));
-                        negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_act_addrb'length));
-                        positive_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
+
                         valid_event <= '1';
 
                         -- Read the value from memory
                         if (s_axis_tdata(63 downto 60) = POS_EVT) then
                             excitation_polarity <= POSITIVE_CHANNEL;
+                            positive_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_state_addrb'length));
+                            positive_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
                         else
                             excitation_polarity <= NEGATIVE_CHANNEL;
+                            negative_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_state_addrb'length));
+                            negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_act_addrb'length));
                         end if;
 
                         active_pixel(7) <= or_reduce(s_axis_tdata(31 downto 28));
@@ -279,7 +306,7 @@ begin
 
                 if valid_event = '1' then
                     if excitation_polarity = POSITIVE_CHANNEL then
-                        word_in <= std_logic_vector(filter_positive_memory(memory_address));
+                        word_in <= positive_state_doutb;
                         frame_row <= positive_act_doutb;
                     else
                         word_in <= negative_state_doutb;
@@ -351,7 +378,10 @@ begin
                 when INTEGRATE =>
                     if valid_event_dd = '1' then
                         if excitation_polarity_dd = POSITIVE_CHANNEL then
-                            filter_positive_memory(memory_address_dd) <= unsigned(word_out);
+                            positive_state_addra <= std_logic_vector(to_unsigned(memory_address_dd, positive_state_addra'length));
+                            positive_state_dina <= word_out;
+                            positive_state_ena <= '1';
+
                             positive_act_addra <= std_logic_vector(to_unsigned(memory_address_dd, positive_act_addra'length));
                             positive_act_dina <= spike_out;
                             positive_act_ena <= '1';
@@ -395,7 +425,10 @@ begin
                             negative_act_dina <= (others => '0');
                             negative_act_ena <= '1';
                         else
-                            filter_positive_memory(reset_address) <= (others => '0');
+                            positive_state_addra <= std_logic_vector(to_unsigned(reset_address, positive_state_addra'length));
+                            positive_state_dina <= (others => '0');
+                            positive_state_ena <= '1';
+
                             positive_act_addra <= std_logic_vector(to_unsigned(reset_address, positive_act_addra'length));
                             positive_act_dina <= (others => '0');
                             positive_act_ena <= '1';
