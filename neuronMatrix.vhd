@@ -53,20 +53,26 @@ architecture rtl of neuronMatrix is
     -- Per message, 8 Processing Elements are needed
     signal active_pixel : std_logic_vector(7 downto 0);
     signal active_pixel_d : std_logic_vector(7 downto 0);
+    signal active_pixel_dd : std_logic_vector(7 downto 0);
 
     constant INITIAL_WORD : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0) := (others => '0');
 
     signal valid_event : std_logic;
     signal valid_event_d : std_logic;
     signal valid_event_dd : std_logic;
+    signal valid_event_ddd : std_logic;
+    signal valid_event_dddd : std_logic;
 
     signal memory_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
     signal memory_address_d : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
     signal memory_address_dd : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+    signal memory_address_ddd : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+    signal memory_address_dddd : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
 
     signal excitation_polarity : std_logic;
     signal excitation_polarity_d : std_logic;
     signal excitation_polarity_dd : std_logic;
+    signal excitation_polarity_ddd : std_logic;
 
     signal decay_counter : natural range 0 to DECAY_COUNTER_LIMIT := 0;
     signal decay_counter_hit : std_logic;
@@ -88,6 +94,7 @@ architecture rtl of neuronMatrix is
     constant FLUSH_BUFFER_POSITIONS : natural := (AXIS_TDATA_WIDTH_G/NEURONS_PER_CLUSTER);
     signal flush_out : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
     signal flush_ongoing : std_logic := '0';
+    signal flush_ongoing_d : std_logic := '0';
     signal flush_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
     signal flush_buffIdx : natural range 0 to FLUSH_BUFFER_POSITIONS;
     signal flush_rowIdx : integer range 0 to SNN_FRAME_HEIGHT - 1;
@@ -248,6 +255,13 @@ begin
             excitation_polarity <= '0';
             case state is
                 when INTEGRATE =>
+                    -- Defaults to read but not write. This way, output port updates as the address and not one clock after
+                    valid_event <= '0';
+                    negative_state_enb <= '1';
+                    positive_state_enb <= '1';
+                    positive_act_enb <= '1';
+                    negative_act_enb <= '1';
+
                     if s_axis_tvalid = '1' then
                         -- Divide by 4 or 2 shifts right, same as leaving out the 2LSb
                         -- Target dimension is 128, only 7 bits needed. Therefore, get the slice [8:2]
@@ -255,46 +269,53 @@ begin
                         --      route_x <= unsigned(s_axis_tdata(51 downto 48));
                         --      route_y <= unsigned(s_axis_tdata(40 downto 34));
                         readOut_memory_address := to_integer(unsigned(s_axis_tdata(40 downto 34))) * CLUSTERS_PER_ROW + to_integer(unsigned(s_axis_tdata(51 downto 48)));
-                        memory_address <= readOut_memory_address;
+                        if not ((readOut_memory_address = memory_address and valid_event = '1') or (readOut_memory_address = memory_address_d and valid_event_d = '1') or (readOut_memory_address = memory_address_dd and valid_event_dd = '1') or (readOut_memory_address = memory_address_ddd and valid_event_ddd = '1') or (readOut_memory_address = memory_address_dddd and valid_event_dddd = '1')) then
+                            -- If there are no hazards, continue
+                            memory_address <= readOut_memory_address;
 
-                        valid_event <= '1';
+                            valid_event <= '1';
 
-                        -- Read the value from memory
-                        if (s_axis_tdata(63 downto 60) = POS_EVT) then
-                            excitation_polarity <= POSITIVE_CHANNEL;
-                            positive_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_state_addrb'length));
-                            positive_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
-                            positive_state_enb <= '1';
-                            positive_act_enb <= '1';
-                        else
-                            excitation_polarity <= NEGATIVE_CHANNEL;
-                            negative_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_state_addrb'length));
-                            negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_act_addrb'length));
-                            negative_state_enb <= '1';
-                            negative_act_enb <= '1';
+                            -- Read the value from memory
+                            if (s_axis_tdata(63 downto 60) = POS_EVT) then
+                                excitation_polarity <= POSITIVE_CHANNEL;
+                                positive_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_state_addrb'length));
+                                positive_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
+                                positive_state_enb <= '1';
+                                positive_act_enb <= '1';
+                            else
+                                excitation_polarity <= NEGATIVE_CHANNEL;
+                                negative_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_state_addrb'length));
+                                negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_act_addrb'length));
+                                negative_act_enb <= '1';
+                                negative_state_enb <= '1';
+                            end if;
+
+                            active_pixel(7) <= or_reduce(s_axis_tdata(31 downto 28));
+                            active_pixel(6) <= or_reduce(s_axis_tdata(27 downto 24));
+                            active_pixel(5) <= or_reduce(s_axis_tdata(23 downto 20));
+                            active_pixel(4) <= or_reduce(s_axis_tdata(19 downto 16));
+                            active_pixel(3) <= or_reduce(s_axis_tdata(15 downto 12));
+                            active_pixel(2) <= or_reduce(s_axis_tdata(11 downto 8));
+                            active_pixel(1) <= or_reduce(s_axis_tdata(7 downto 4));
+                            active_pixel(0) <= or_reduce(s_axis_tdata(3 downto 0));
                         end if;
-
-                        active_pixel(7) <= or_reduce(s_axis_tdata(31 downto 28));
-                        active_pixel(6) <= or_reduce(s_axis_tdata(27 downto 24));
-                        active_pixel(5) <= or_reduce(s_axis_tdata(23 downto 20));
-                        active_pixel(4) <= or_reduce(s_axis_tdata(19 downto 16));
-                        active_pixel(3) <= or_reduce(s_axis_tdata(15 downto 12));
-                        active_pixel(2) <= or_reduce(s_axis_tdata(11 downto 8));
-                        active_pixel(1) <= or_reduce(s_axis_tdata(7 downto 4));
-                        active_pixel(0) <= or_reduce(s_axis_tdata(3 downto 0));
-
-                    else
-                        valid_event <= '0';
-                        negative_state_enb <= '0';
-                        positive_state_enb <= '0';
-                        positive_act_enb <= '0';
-                        negative_act_enb <= '0';
                     end if;
 
                 when FLUSH =>
                     if flush_ongoing = '1' then
                     end if;
 
+                when DECAY =>
+                    if prev_state = INTEGRATE then
+                        decay_ongoing <= '1';
+                        decay_address <= 0;
+                        decay_chanIdx <= NEGATIVE_CHANNEL;
+                    end if;
+                    -- Calculate the address
+                    if decay_ongoing = '1' then
+                        -- Nothing for now
+                        decay_ongoing <= '0';
+                    end if;
                 when others =>
                     -- Nothing
             end case;
@@ -308,7 +329,12 @@ begin
                 memory_address_d <= memory_address;
                 active_pixel_d <= active_pixel;
 
-                if valid_event = '1' then
+                excitation_polarity_dd <= excitation_polarity_d;
+                valid_event_dd <= valid_event_d;
+                memory_address_dd <= memory_address_d;
+                active_pixel_dd <= active_pixel_d;
+
+                if valid_event_d = '1' then
                     if excitation_polarity = POSITIVE_CHANNEL then
                         word_in <= positive_state_doutb;
                         frame_row <= positive_act_doutb;
@@ -324,19 +350,19 @@ begin
 
         if rising_edge(aclk) then
             if state = INTEGRATE then
-                excitation_polarity_dd <= excitation_polarity_d;
-                valid_event_dd <= valid_event_d;
-                memory_address_dd <= memory_address_d;
+                excitation_polarity_ddd <= excitation_polarity_dd;
+                valid_event_ddd <= valid_event_dd;
+                memory_address_ddd <= memory_address_dd;
 
                 word_out <= word_in;
                 -- Write back updated cluster from PREVIOUS cycle's event
                 spike_accum := 0;
                 -- Default value for spike_counter_hit
                 spike_counter_hit <= '0';
-                if valid_event_d = '1' then
+                if valid_event_dd = '1' then
                     for i in 0 to NEURONS_PER_CLUSTER - 1 loop
                         spike(i) := '0';
-                        if active_pixel_d(i) = '1' then
+                        if active_pixel_dd(i) = '1' then
                             -- extract this neuron
                             cell := unsigned(word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE));
 
@@ -384,22 +410,25 @@ begin
                     positive_act_ena <= '0';
                     positive_state_ena <= '0';
                     negative_state_ena <= '0';
-                    if valid_event_dd = '1' then
 
-                        if excitation_polarity_dd = POSITIVE_CHANNEL then
-                            positive_state_addra <= std_logic_vector(to_unsigned(memory_address_dd, positive_state_addra'length));
+                    valid_event_dddd <= valid_event_ddd;
+                    memory_address_dddd <= memory_address_ddd;
+                    if valid_event_ddd = '1' then
+
+                        if excitation_polarity_ddd = POSITIVE_CHANNEL then
+                            positive_state_addra <= std_logic_vector(to_unsigned(memory_address_ddd, positive_state_addra'length));
                             positive_state_dina <= word_out;
                             positive_state_ena <= '1';
 
-                            positive_act_addra <= std_logic_vector(to_unsigned(memory_address_dd, positive_act_addra'length));
+                            positive_act_addra <= std_logic_vector(to_unsigned(memory_address_ddd, positive_act_addra'length));
                             positive_act_dina <= spike_out;
                             positive_act_ena <= '1';
                         else
-                            negative_state_addra <= std_logic_vector(to_unsigned(memory_address_dd, negative_state_addra'length));
+                            negative_state_addra <= std_logic_vector(to_unsigned(memory_address_ddd, negative_state_addra'length));
                             negative_state_dina <= word_out;
                             negative_state_ena <= '1';
 
-                            negative_act_addra <= std_logic_vector(to_unsigned(memory_address_dd, negative_act_addra'length));
+                            negative_act_addra <= std_logic_vector(to_unsigned(memory_address_ddd, negative_act_addra'length));
                             negative_act_dina <= spike_out;
                             negative_act_ena <= '1';
                         end if;
@@ -449,16 +478,7 @@ begin
                         end if;
                     end if;
                 when DECAY =>
-                    if prev_state = INTEGRATE then
-                        decay_ongoing <= '1';
-                        decay_address <= 0;
-                        decay_chanIdx <= NEGATIVE_CHANNEL;
-                    end if;
 
-                    if decay_ongoing = '1' then
-                        -- Nothing for now
-                        decay_ongoing <= '0';
-                    end if;
                 when FLUSH =>
                     -- Make sure nothing is written into memory in this stage.
                     negative_act_ena <= '0';
@@ -502,6 +522,7 @@ begin
                     -- FLUSH: walk through frame and emit AXI words
                 when FLUSH =>
                     s_axis_tready <= '0';
+                    flush_ongoing_d <= flush_ongoing;
 
                     -- First FLUSH cycle: initialise indices and start negative channel
                     if prev_state /= FLUSH then
@@ -516,7 +537,7 @@ begin
                         negative_act_enb <= '1';
 
                         -- Ongoing FLUSH
-                    elsif flush_ongoing = '1' then
+                    elsif flush_ongoing_d = '1' then
                         -- 1) calculate new address
                         if flush_chanIdx = POSITIVE_CHANNEL then
                             positive_act_addrb <= std_logic_vector(unsigned(positive_act_addrb) + 1);
