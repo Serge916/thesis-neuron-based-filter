@@ -87,8 +87,8 @@ begin
           -- TRIG_EVT should always go through if flag is set
           (s_axis_tdata(63 downto 60) = TRIG_EVT and not LET_THROUGH_ONLY_EVENTS) or
           -- ROI
-          (unsigned(s_axis_tdata(53 downto 43)) > ROI_WIDTH_BASE_PIXEL and unsigned(s_axis_tdata(53 downto 43)) < ROI_WIDTH_FINAL_PIXEL and
-          unsigned(s_axis_tdata(42 downto 32)) > ROI_HEIGHT_BASE_PIXEL and unsigned(s_axis_tdata(42 downto 32)) < ROI_HEIGHT_FINAL_PIXEL) then
+          (unsigned(s_axis_tdata(53 downto 43)) >= ROI_WIDTH_BASE_PIXEL and unsigned(s_axis_tdata(53 downto 43)) < ROI_WIDTH_FINAL_PIXEL and
+          unsigned(s_axis_tdata(42 downto 32)) >= ROI_HEIGHT_BASE_PIXEL and unsigned(s_axis_tdata(42 downto 32)) < ROI_HEIGHT_FINAL_PIXEL) then
 
           forward := '1';
         else
