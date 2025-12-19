@@ -92,14 +92,16 @@ architecture rtl of neuronMatrix is
 
     -- Signals for flush
     constant FLUSH_BUFFER_POSITIONS : natural := (AXIS_TDATA_WIDTH_G/NEURONS_PER_CLUSTER);
-    signal flush_out : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0) := (others => '0');
+    signal flush_out : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0);-- := (others => '0');
     signal flush_ongoing : std_logic := '0';
     signal flush_ongoing_d : std_logic := '0';
     signal flush_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
     signal flush_buffIdx : natural range 0 to FLUSH_BUFFER_POSITIONS;
+    signal flush_buffIdx_d : natural range 0 to FLUSH_BUFFER_POSITIONS;
     signal flush_rowIdx : integer range 0 to SNN_FRAME_HEIGHT - 1;
     signal flush_colIdx : integer range 0 to SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1;
     signal flush_chanIdx : std_logic;
+    signal flush_chanIdx_d : std_logic;
 
     -- Signals for reset
     signal reset_ongoing : std_logic := '0';
@@ -111,7 +113,9 @@ architecture rtl of neuronMatrix is
     signal decay_chanIdx : std_logic;
     -- Registered AXI output (one-cycle pipeline for flush)
     signal axi_last_reg : std_logic := '0';
+    signal axi_last_reg_d : std_logic := '0';
     signal axi_valid_reg : std_logic := '0';
+    signal axi_valid_reg_d : std_logic := '0';
 
     -- Positive activation frame signals
     signal positive_act_ena : std_logic := '0';
@@ -492,11 +496,13 @@ begin
         if rising_edge(aclk) then
             -- AXI Valid and AXI last are driven with 1 clock difference
             axi_valid_reg <= '0';
+            axi_valid_reg_d <= axi_valid_reg;
             axi_last_reg <= '0';
-            m_axis_tlast <= axi_last_reg;
-            m_axis_tvalid <= axi_valid_reg;
+            axi_last_reg_d <= axi_last_reg;
+            m_axis_tlast <= axi_last_reg_d;
+            m_axis_tvalid <= axi_valid_reg_d;
             -- If axi_valid = 1, the data is already is flush_out
-            if axi_valid_reg = '1' then
+            if axi_valid_reg_d = '1' then
                 m_axis_tdata <= flush_out;
             end if;
 
@@ -523,6 +529,8 @@ begin
                 when FLUSH =>
                     s_axis_tready <= '0';
                     flush_ongoing_d <= flush_ongoing;
+                    flush_chanIdx_d <= flush_chanIdx;
+                    flush_buffIdx_d <= flush_buffIdx;
 
                     -- First FLUSH cycle: initialise indices and start negative channel
                     if prev_state /= FLUSH then
@@ -538,7 +546,6 @@ begin
 
                         -- Ongoing FLUSH
                     elsif flush_ongoing_d = '1' then
-                        -- 1) calculate new address
                         if flush_chanIdx = POSITIVE_CHANNEL then
                             positive_act_addrb <= std_logic_vector(unsigned(positive_act_addrb) + 1);
                         else
@@ -582,10 +589,10 @@ begin
                         end if;
 
                         -- 2) read value
-                        if flush_chanIdx = POSITIVE_CHANNEL then
-                            flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= positive_act_doutb;
+                        if flush_chanIdx_d = POSITIVE_CHANNEL then
+                            flush_out((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= positive_act_doutb;
                         else
-                            flush_out((flush_buffIdx + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx * NEURONS_PER_CLUSTER) <= negative_act_doutb;
+                            flush_out((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= negative_act_doutb;
                         end if;
                     end if; -- flush_ongoing = '1'
             end case;
