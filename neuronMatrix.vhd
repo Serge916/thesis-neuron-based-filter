@@ -256,8 +256,6 @@ begin
             positive_act_enb <= '0';
             negative_act_enb <= '0';
 
-            pipeStage(0).excitation_polarity <= '0';
-
             -- Move signals to the next stage of registers
             for k in 1 to PIPE_STAGES_C loop
                 pipeStage(k) <= pipeStage(k - 1);
@@ -368,35 +366,8 @@ begin
                         end if;
                     end if;
 
-                when FLUSH =>
-                    if flush_ongoing = '1' then
-                    end if;
-
-                when DECAY =>
-                    if prev_state = INTEGRATE then
-                        decay_ongoing <= '1';
-                        decay_address <= 0;
-                        decay_chanIdx <= NEGATIVE_CHANNEL;
-                    end if;
-                    -- Calculate the address
-                    if decay_ongoing = '1' then
-                        -- Nothing for now
-                        decay_ongoing <= '0';
-                    end if;
-                when others =>
-                    -- Nothing
-            end case;
-
-            -- STAGE 4: Write back to memory the updated neuron states
-            case state is
-                when INTEGRATE =>
-                    negative_act_ena <= '0';
-                    positive_act_ena <= '0';
-                    positive_state_ena <= '0';
-                    negative_state_ena <= '0';
-
+                    -- STAGE 4: Write back to memory the updated neuron states
                     if pipeStage(3).valid_event = '1' then
-
                         if pipeStage(3).excitation_polarity = POSITIVE_CHANNEL then
                             positive_state_addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, positive_state_addra'length));
                             positive_state_dina <= word_out;
@@ -415,12 +386,21 @@ begin
                             negative_act_ena <= '1';
                         end if;
                     end if;
-                when RESET =>
-                    negative_act_ena <= '0';
-                    positive_act_ena <= '0';
-                    positive_state_ena <= '0';
-                    negative_state_ena <= '0';
 
+                when DECAY =>
+                    if prev_state = INTEGRATE then
+                        decay_ongoing <= '1';
+                        decay_address <= 0;
+                        decay_chanIdx <= NEGATIVE_CHANNEL;
+                    end if;
+                    -- Calculate the address
+                    if decay_ongoing = '1' then
+                        -- Nothing for now
+                        decay_ongoing <= '0';
+                    end if;
+
+                when RESET =>
+                    -- RESET goes address by address setting everything to the initial value
                     if prev_state = FLUSH then
                         reset_ongoing <= '1';
                         reset_address <= 0;
@@ -459,10 +439,8 @@ begin
                             positive_act_ena <= '1';
                         end if;
                     end if;
-                when DECAY =>
-
-                when FLUSH =>
-                    -- Make sure nothing is written into memory in this stage.
+                when others =>
+                    -- Nothing
             end case;
 
             -- AXI Stream Controller part
