@@ -50,30 +50,7 @@ architecture rtl of neuronMatrix is
     signal spike_counter : natural range 0 to SPIKE_ACCUMULATION_LIMIT;
     signal spike_counter_hit : std_logic := '0';
 
-    -- Per message, 8 Processing Elements are needed
-    signal active_pixel : std_logic_vector(7 downto 0);
-    signal active_pixel_d : std_logic_vector(7 downto 0);
-    signal active_pixel_dd : std_logic_vector(7 downto 0);
-
     constant INITIAL_WORD : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0) := (others => '0');
-
-    signal valid_event : std_logic;
-    signal valid_event_d : std_logic;
-    signal valid_event_dd : std_logic;
-    signal valid_event_ddd : std_logic;
-    signal valid_event_dddd : std_logic;
-
-    signal memory_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
-    signal memory_address_d : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
-    signal memory_address_dd : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
-    signal memory_address_ddd : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
-    signal memory_address_dddd : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
-
-    signal excitation_polarity : std_logic;
-    signal excitation_polarity_d : std_logic;
-    signal excitation_polarity_dd : std_logic;
-    signal excitation_polarity_ddd : std_logic;
-
     signal decay_counter : natural range 0 to DECAY_COUNTER_LIMIT := 0;
     signal decay_counter_hit : std_logic;
 
@@ -157,6 +134,17 @@ architecture rtl of neuronMatrix is
     signal positive_state_enb : std_logic := '0';
     signal positive_state_web : std_logic_vector(0 downto 0) := (others => '0');
     signal positive_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
+
+    -- Pipeline variables. Shared accross stages
+    type pipe_meta_t is record
+        valid_event : std_logic;
+        excitation_polarity : std_logic;
+        memory_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
+        active_pixel : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
+    end record;
+    type pipe_meta_arr_t is array (natural range <>) of pipe_meta_t;
+    constant PIPE_STAGES_C : natural := 4;
+    signal pipeStage : pipe_meta_arr_t(0 to PIPE_STAGES_C);
 
     component blk_mem_activation
         port (
@@ -254,13 +242,32 @@ begin
         variable spike_accum : integer range 0 to NEURONS_PER_CLUSTER;
         variable readOut_memory_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
     begin
-        -- STAGE 1: Read the incoming AXI message. If valid, get the neuron address to route it to. Check which neurons in the cluster to activate.
         if rising_edge(aclk) then
-            excitation_polarity <= '0';
+
+            -- Defaults: no writes
+            positive_state_ena <= '0';
+            negative_state_ena <= '0';
+            positive_act_ena <= '0';
+            negative_act_ena <= '0';
+
+            -- Defaults: allow reads (or disable by default if you prefer)
+            positive_state_enb <= '0';
+            negative_state_enb <= '0';
+            positive_act_enb <= '0';
+            negative_act_enb <= '0';
+
+            pipeStage(0).excitation_polarity <= '0';
+
+            -- Move signals to the next stage of registers
+            for k in 1 to PIPE_STAGES_C loop
+                pipeStage(k) <= pipeStage(k - 1);
+            end loop;
+
             case state is
                 when INTEGRATE =>
+                    -- STAGE 1: Read the incoming AXI message. If valid, get the neuron address to route it to. Check which neurons in the cluster to activate.
                     -- Defaults to read but not write. This way, output port updates as the address and not one clock after
-                    valid_event <= '0';
+                    pipeStage(0).valid_event <= '0';
                     negative_state_enb <= '1';
                     positive_state_enb <= '1';
                     positive_act_enb <= '1';
@@ -273,35 +280,91 @@ begin
                         --      route_x <= unsigned(s_axis_tdata(51 downto 48));
                         --      route_y <= unsigned(s_axis_tdata(40 downto 34));
                         readOut_memory_address := to_integer(unsigned(s_axis_tdata(40 downto 34))) * CLUSTERS_PER_ROW + to_integer(unsigned(s_axis_tdata(51 downto 48)));
-                        if not ((readOut_memory_address = memory_address and valid_event = '1') or (readOut_memory_address = memory_address_d and valid_event_d = '1') or (readOut_memory_address = memory_address_dd and valid_event_dd = '1') or (readOut_memory_address = memory_address_ddd and valid_event_ddd = '1') or (readOut_memory_address = memory_address_dddd and valid_event_dddd = '1')) then
+                        if not ((readOut_memory_address = pipeStage(0).memory_address and pipeStage(0).valid_event = '1') or (readOut_memory_address = pipeStage(1).memory_address and pipeStage(1).valid_event = '1') or (readOut_memory_address = pipeStage(2).memory_address and pipeStage(2).valid_event = '1') or (readOut_memory_address = pipeStage(3).memory_address and pipeStage(3).valid_event = '1') or (readOut_memory_address = pipeStage(4).memory_address and pipeStage(4).valid_event = '1')) then
                             -- If there are no hazards, continue
-                            memory_address <= readOut_memory_address;
-
-                            valid_event <= '1';
+                            pipeStage(0).valid_event <= '1';
+                            pipeStage(0).memory_address <= readOut_memory_address;
 
                             -- Read the value from memory
                             if (s_axis_tdata(63 downto 60) = POS_EVT) then
-                                excitation_polarity <= POSITIVE_CHANNEL;
+                                pipeStage(0).excitation_polarity <= POSITIVE_CHANNEL;
                                 positive_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_state_addrb'length));
                                 positive_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
                                 positive_state_enb <= '1';
                                 positive_act_enb <= '1';
                             else
-                                excitation_polarity <= NEGATIVE_CHANNEL;
+                                pipeStage(0).excitation_polarity <= NEGATIVE_CHANNEL;
                                 negative_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_state_addrb'length));
                                 negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_act_addrb'length));
                                 negative_act_enb <= '1';
                                 negative_state_enb <= '1';
                             end if;
 
-                            active_pixel(7) <= or_reduce(s_axis_tdata(31 downto 28));
-                            active_pixel(6) <= or_reduce(s_axis_tdata(27 downto 24));
-                            active_pixel(5) <= or_reduce(s_axis_tdata(23 downto 20));
-                            active_pixel(4) <= or_reduce(s_axis_tdata(19 downto 16));
-                            active_pixel(3) <= or_reduce(s_axis_tdata(15 downto 12));
-                            active_pixel(2) <= or_reduce(s_axis_tdata(11 downto 8));
-                            active_pixel(1) <= or_reduce(s_axis_tdata(7 downto 4));
-                            active_pixel(0) <= or_reduce(s_axis_tdata(3 downto 0));
+                            pipeStage(0).active_pixel(7) <= or_reduce(s_axis_tdata(31 downto 28));
+                            pipeStage(0).active_pixel(6) <= or_reduce(s_axis_tdata(27 downto 24));
+                            pipeStage(0).active_pixel(5) <= or_reduce(s_axis_tdata(23 downto 20));
+                            pipeStage(0).active_pixel(4) <= or_reduce(s_axis_tdata(19 downto 16));
+                            pipeStage(0).active_pixel(3) <= or_reduce(s_axis_tdata(15 downto 12));
+                            pipeStage(0).active_pixel(2) <= or_reduce(s_axis_tdata(11 downto 8));
+                            pipeStage(0).active_pixel(1) <= or_reduce(s_axis_tdata(7 downto 4));
+                            pipeStage(0).active_pixel(0) <= or_reduce(s_axis_tdata(3 downto 0));
+                        end if;
+                    end if;
+
+                    -- STAGE 2: Read from memory the corresponding address containing 8 neuron states.
+                    if pipeStage(1).valid_event = '1' then
+                        if pipeStage(1).excitation_polarity = POSITIVE_CHANNEL then
+                            word_in <= positive_state_doutb;
+                            frame_row <= positive_act_doutb;
+                        else
+                            word_in <= negative_state_doutb;
+                            frame_row <= negative_act_doutb;
+                        end if;
+                    end if;
+
+                    -- STAGE 3: Perform integration of the activated neurons
+                    -- Write back updated cluster from PREVIOUS cycle's event
+                    word_out <= word_in;
+                    spike_accum := 0;
+                    -- Default value for spike_counter_hit
+                    spike_counter_hit <= '0';
+                    if pipeStage(2).valid_event = '1' then
+                        for i in 0 to NEURONS_PER_CLUSTER - 1 loop
+                            spike(i) := '0';
+                            if pipeStage(2).active_pixel(i) = '1' then
+                                -- extract this neuron
+                                cell := unsigned(word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE));
+
+                                -- If last bit is 1, fire a spike
+                                if cell(MEMBRANE_POTENTIAL_SIZE - 1) = '1' then
+                                    spike(i) := '1';
+                                    spike_accum := spike_accum + 1;
+                                else
+                                    spike(i) := '0';
+                                end if;
+
+                                -- If it is all 0, initialize it to 1. Else, shift 1 position to the left.
+                                if cell = INITIAL_WORD then
+                                    cell := to_unsigned(1, MEMBRANE_POTENTIAL_SIZE);
+                                else
+                                    cell := cell sll 1;
+                                end if;
+                                -- report "i=" & integer'image(i) &
+                                --     " cell=" & integer'image(to_integer(cell)) &
+                                --     " spike(i)=" & std_logic'image(spike(i)) &
+                                --     " spike_counter=" & integer'image(spike_counter);
+                                -- write updated cell back into word_out
+                                word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE) <= std_logic_vector(cell);
+                            end if;
+                        end loop;
+                        spike_out <= spike or frame_row;
+                        -- Trigger frame flushing. Check whether there is an operation ongoing with spike_counter_hit. It should be '0' if nothing is happening.
+                        -- if spike_counter >= SPIKE_ACCUMULATION_LIMIT and flush_ongoing = '0' then
+                        if spike_counter >= 5 then
+                            spike_counter_hit <= '1';
+                            spike_counter <= 0;
+                        else
+                            spike_counter <= spike_counter + spike_accum;
                         end if;
                     end if;
 
@@ -323,90 +386,8 @@ begin
                 when others =>
                     -- Nothing
             end case;
-        end if;
 
-        -- STAGE 2: Read from memory the corresponding address containing 8 neuron states.
-        if rising_edge(aclk) then
-            if state = INTEGRATE then
-                excitation_polarity_d <= excitation_polarity;
-                valid_event_d <= valid_event;
-                memory_address_d <= memory_address;
-                active_pixel_d <= active_pixel;
-
-                excitation_polarity_dd <= excitation_polarity_d;
-                valid_event_dd <= valid_event_d;
-                memory_address_dd <= memory_address_d;
-                active_pixel_dd <= active_pixel_d;
-
-                if valid_event_d = '1' then
-                    if excitation_polarity_d = POSITIVE_CHANNEL then
-                        word_in <= positive_state_doutb;
-                        frame_row <= positive_act_doutb;
-                    else
-                        word_in <= negative_state_doutb;
-                        frame_row <= negative_act_doutb;
-                    end if;
-                end if;
-            end if;
-        end if;
-
-        -- STAGE 3: Perform integration of the activated neurons
-
-        if rising_edge(aclk) then
-            if state = INTEGRATE then
-                excitation_polarity_ddd <= excitation_polarity_dd;
-                valid_event_ddd <= valid_event_dd;
-                memory_address_ddd <= memory_address_dd;
-
-                word_out <= word_in;
-                -- Write back updated cluster from PREVIOUS cycle's event
-                spike_accum := 0;
-                -- Default value for spike_counter_hit
-                spike_counter_hit <= '0';
-                if valid_event_dd = '1' then
-                    for i in 0 to NEURONS_PER_CLUSTER - 1 loop
-                        spike(i) := '0';
-                        if active_pixel_dd(i) = '1' then
-                            -- extract this neuron
-                            cell := unsigned(word_in((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE));
-
-                            -- If last bit is 1, fire a spike
-                            if cell(MEMBRANE_POTENTIAL_SIZE - 1) = '1' then
-                                spike(i) := '1';
-                                spike_accum := spike_accum + 1;
-                            else
-                                spike(i) := '0';
-                            end if;
-
-                            -- If it is all 0, initialize it to 1. Else, shift 1 position to the left.
-                            if cell = INITIAL_WORD then
-                                cell := to_unsigned(1, MEMBRANE_POTENTIAL_SIZE);
-                            else
-                                cell := cell sll 1;
-                            end if;
-                            -- report "i=" & integer'image(i) &
-                            --     " cell=" & integer'image(to_integer(cell)) &
-                            --     " spike(i)=" & std_logic'image(spike(i)) &
-                            --     " spike_counter=" & integer'image(spike_counter);
-                            -- write updated cell back into word_out
-                            word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE) <= std_logic_vector(cell);
-                        end if;
-                    end loop;
-                    spike_out <= spike or frame_row;
-                    -- Trigger frame flushing. Check whether there is an operation ongoing with spike_counter_hit. It should be '0' if nothing is happening.
-                    -- if spike_counter >= SPIKE_ACCUMULATION_LIMIT and flush_ongoing = '0' then
-                    if spike_counter >= 5 then
-                        spike_counter_hit <= '1';
-                        spike_counter <= 0;
-                    else
-                        spike_counter <= spike_counter + spike_accum;
-                    end if;
-                end if;
-            end if;
-        end if;
-
-        -- STAGE 4: Write back to memory the updated neuron states
-        if rising_edge(aclk) then
+            -- STAGE 4: Write back to memory the updated neuron states
             case state is
                 when INTEGRATE =>
                     negative_act_ena <= '0';
@@ -414,24 +395,22 @@ begin
                     positive_state_ena <= '0';
                     negative_state_ena <= '0';
 
-                    valid_event_dddd <= valid_event_ddd;
-                    memory_address_dddd <= memory_address_ddd;
-                    if valid_event_ddd = '1' then
+                    if pipeStage(3).valid_event = '1' then
 
-                        if excitation_polarity_ddd = POSITIVE_CHANNEL then
-                            positive_state_addra <= std_logic_vector(to_unsigned(memory_address_ddd, positive_state_addra'length));
+                        if pipeStage(3).excitation_polarity = POSITIVE_CHANNEL then
+                            positive_state_addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, positive_state_addra'length));
                             positive_state_dina <= word_out;
                             positive_state_ena <= '1';
 
-                            positive_act_addra <= std_logic_vector(to_unsigned(memory_address_ddd, positive_act_addra'length));
+                            positive_act_addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, positive_act_addra'length));
                             positive_act_dina <= spike_out;
                             positive_act_ena <= '1';
                         else
-                            negative_state_addra <= std_logic_vector(to_unsigned(memory_address_ddd, negative_state_addra'length));
+                            negative_state_addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, negative_state_addra'length));
                             negative_state_dina <= word_out;
                             negative_state_ena <= '1';
 
-                            negative_act_addra <= std_logic_vector(to_unsigned(memory_address_ddd, negative_act_addra'length));
+                            negative_act_addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, negative_act_addra'length));
                             negative_act_dina <= spike_out;
                             negative_act_ena <= '1';
                         end if;
@@ -484,15 +463,9 @@ begin
 
                 when FLUSH =>
                     -- Make sure nothing is written into memory in this stage.
-                    negative_act_ena <= '0';
-                    positive_act_ena <= '0';
-                    positive_state_ena <= '0';
-                    negative_state_ena <= '0';
             end case;
-        end if;
 
-        -- AXI Stream Controller part
-        if rising_edge(aclk) then
+            -- AXI Stream Controller part
             -- AXI Valid and AXI last are driven with 1 clock difference
             axi_valid_reg <= '0';
             axi_valid_reg_d <= axi_valid_reg;
@@ -547,8 +520,10 @@ begin
                     elsif flush_ongoing_d = '1' then
                         if flush_chanIdx = POSITIVE_CHANNEL then
                             positive_act_addrb <= std_logic_vector(unsigned(positive_act_addrb) + 1);
+                            positive_act_enb <= '1';
                         else
                             negative_act_addrb <= std_logic_vector(unsigned(negative_act_addrb) + 1);
+                            negative_act_enb <= '1';
                         end if;
 
                         -- 1b) check whether something special happens
