@@ -339,7 +339,7 @@ begin
                 active_pixel_dd <= active_pixel_d;
 
                 if valid_event_d = '1' then
-                    if excitation_polarity = POSITIVE_CHANNEL then
+                    if excitation_polarity_d = POSITIVE_CHANNEL then
                         word_in <= positive_state_doutb;
                         frame_row <= positive_act_doutb;
                     else
@@ -407,7 +407,6 @@ begin
 
         -- STAGE 4: Write back to memory the updated neuron states
         if rising_edge(aclk) then
-            positive_act_ena <= '0';
             case state is
                 when INTEGRATE =>
                     negative_act_ena <= '0';
