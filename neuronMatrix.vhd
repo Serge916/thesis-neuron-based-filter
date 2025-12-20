@@ -94,46 +94,74 @@ architecture rtl of neuronMatrix is
     signal axi_valid_reg : std_logic := '0';
     signal axi_valid_reg_d : std_logic := '0';
 
-    -- Positive activation frame signals
-    signal positive_act_ena : std_logic := '0';
-    signal positive_act_wea : std_logic_vector(0 downto 0) := (others => '1');
-    signal positive_act_addra : std_logic_vector(10 downto 0) := (others => '0');
-    signal positive_act_dina : std_logic_vector(7 downto 0) := (others => '0');
-    signal positive_act_addrb : std_logic_vector(10 downto 0) := (others => '0');
-    signal positive_act_doutb : std_logic_vector(7 downto 0) := (others => '0');
-    signal positive_act_enb : std_logic := '0';
-    signal positive_act_web : std_logic_vector(0 downto 0) := (others => '0');
-    signal positive_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
-    -- Negative activation frame signals
-    signal negative_act_ena : std_logic := '0';
-    signal negative_act_wea : std_logic_vector(0 downto 0) := (others => '1');
-    signal negative_act_addra : std_logic_vector(10 downto 0) := (others => '0');
-    signal negative_act_dina : std_logic_vector(7 downto 0) := (others => '0');
-    signal negative_act_addrb : std_logic_vector(10 downto 0) := (others => '0');
-    signal negative_act_doutb : std_logic_vector(7 downto 0) := (others => '0');
-    signal negative_act_enb : std_logic := '0';
-    signal negative_act_web : std_logic_vector(0 downto 0) := (others => '0');
-    signal negative_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
-    -- Negative neuron state signals
-    signal negative_state_ena : std_logic := '0';
-    signal negative_state_wea : std_logic_vector(0 downto 0) := (others => '1');
-    signal negative_state_addra : std_logic_vector(10 downto 0) := (others => '0');
-    signal negative_state_dina : std_logic_vector(63 downto 0) := (others => '0');
-    signal negative_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
-    signal negative_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
-    signal negative_state_enb : std_logic := '0';
-    signal negative_state_web : std_logic_vector(0 downto 0) := (others => '0');
-    signal negative_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
-    -- Negative neuron state signals
-    signal positive_state_ena : std_logic := '0';
-    signal positive_state_wea : std_logic_vector(0 downto 0) := (others => '1');
-    signal positive_state_addra : std_logic_vector(10 downto 0) := (others => '0');
-    signal positive_state_dina : std_logic_vector(63 downto 0) := (others => '0');
-    signal positive_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
-    signal positive_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
-    signal positive_state_enb : std_logic := '0';
-    signal positive_state_web : std_logic_vector(0 downto 0) := (others => '0');
-    signal positive_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
+    -- -- Positive activation frame signals
+    -- signal positive_act_ena : std_logic := '0';
+    -- signal positive_act_wea : std_logic_vector(0 downto 0) := (others => '1');
+    -- signal positive_act_addra : std_logic_vector(10 downto 0) := (others => '0');
+    -- signal positive_act_dina : std_logic_vector(7 downto 0) := (others => '0');
+    -- signal positive_act_addrb : std_logic_vector(10 downto 0) := (others => '0');
+    -- signal positive_act_doutb : std_logic_vector(7 downto 0) := (others => '0');
+    -- signal positive_act_enb : std_logic := '0';
+    -- signal positive_act_web : std_logic_vector(0 downto 0) := (others => '0');
+    -- signal positive_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
+    -- -- Negative activation frame signals
+    -- signal negative_act_ena : std_logic := '0';
+    -- signal negative_act_wea : std_logic_vector(0 downto 0) := (others => '1');
+    -- signal negative_act_addra : std_logic_vector(10 downto 0) := (others => '0');
+    -- signal negative_act_dina : std_logic_vector(7 downto 0) := (others => '0');
+    -- signal negative_act_addrb : std_logic_vector(10 downto 0) := (others => '0');
+    -- signal negative_act_doutb : std_logic_vector(7 downto 0) := (others => '0');
+    -- signal negative_act_enb : std_logic := '0';
+    -- signal negative_act_web : std_logic_vector(0 downto 0) := (others => '0');
+    -- signal negative_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
+    -- -- Negative neuron state signals
+    -- signal negative_state_ena : std_logic := '0';
+    -- signal negative_state_wea : std_logic_vector(0 downto 0) := (others => '1');
+    -- signal negative_state_addra : std_logic_vector(10 downto 0) := (others => '0');
+    -- signal negative_state_dina : std_logic_vector(63 downto 0) := (others => '0');
+    -- signal negative_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
+    -- signal negative_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
+    -- signal negative_state_enb : std_logic := '0';
+    -- signal negative_state_web : std_logic_vector(0 downto 0) := (others => '0');
+    -- signal negative_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
+    -- -- Negative neuron state signals
+    -- signal positive_state_ena : std_logic := '0';
+    -- signal positive_state_wea : std_logic_vector(0 downto 0) := (others => '1');
+    -- signal positive_state_addra : std_logic_vector(10 downto 0) := (others => '0');
+    -- signal positive_state_dina : std_logic_vector(63 downto 0) := (others => '0');
+    -- signal positive_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
+    -- signal positive_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
+    -- signal positive_state_enb : std_logic := '0';
+    -- signal positive_state_web : std_logic_vector(0 downto 0) := (others => '0');
+    -- signal positive_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
+
+    type state_mem_interface_t is record
+        ena : std_logic;
+        wea : std_logic_vector(0 downto 0);
+        addra : std_logic_vector(10 downto 0);
+        dina : std_logic_vector(63 downto 0);
+        addrb : std_logic_vector(10 downto 0);
+        doutb : std_logic_vector(63 downto 0);
+        enb : std_logic;
+        web : std_logic_vector(0 downto 0);
+        dinb : std_logic_vector(63 downto 0);
+    end record;
+    signal positive_state : state_mem_interface_t;
+    signal negative_state : state_mem_interface_t;
+
+    type frame_mem_interface_t is record
+        ena : std_logic;
+        wea : std_logic_vector(0 downto 0);
+        addra : std_logic_vector(10 downto 0);
+        dina : std_logic_vector(7 downto 0);
+        addrb : std_logic_vector(10 downto 0);
+        doutb : std_logic_vector(7 downto 0);
+        enb : std_logic;
+        web : std_logic_vector(0 downto 0);
+        dinb : std_logic_vector(7 downto 0);
+    end record;
+    signal positive_frame : frame_mem_interface_t;
+    signal negative_frame : frame_mem_interface_t;
 
     -- Pipeline variables. Shared accross stages
     type pipe_meta_t is record
@@ -176,64 +204,64 @@ architecture rtl of neuronMatrix is
 
 begin
 
-    positive_frame : blk_mem_activation
+    positive_frame_mem : blk_mem_activation
     port map(
         clka => aclk,
-        ena => positive_act_ena,
-        wea => positive_act_wea,
-        addra => positive_act_addra,
-        dina => positive_act_dina,
+        ena => positive_frame.ena,
+        wea => positive_frame.wea,
+        addra => positive_frame.addra,
+        dina => positive_frame.dina,
         clkb => aclk,
-        enb => positive_act_enb,
-        -- web => positive_act_web,
-        -- dinb => positive_act_dinb,
-        addrb => positive_act_addrb,
-        doutb => positive_act_doutb
+        enb => positive_frame.enb,
+        -- web => positive_frame.web,
+        -- dinb => positive_frame.dinb,
+        addrb => positive_frame.addrb,
+        doutb => positive_frame.doutb
     );
 
-    negative_frame : blk_mem_activation
+    negative_frame_mem : blk_mem_activation
     port map(
         clka => aclk,
-        ena => negative_act_ena,
-        wea => negative_act_wea,
-        addra => negative_act_addra,
-        dina => negative_act_dina,
+        ena => negative_frame.ena,
+        wea => negative_frame.wea,
+        addra => negative_frame.addra,
+        dina => negative_frame.dina,
         clkb => aclk,
-        enb => negative_act_enb,
-        -- web => negative_act_web,
-        -- dinb => negative_act_dinb,
-        addrb => negative_act_addrb,
-        doutb => negative_act_doutb
+        enb => negative_frame.enb,
+        -- web => negative_frame.web,
+        -- dinb => negative_frame.dinb,
+        addrb => negative_frame.addrb,
+        doutb => negative_frame.doutb
     );
 
-    negative_state : blk_mem_state_filter
+    negative_state_mem : blk_mem_state_filter
     port map(
         clka => aclk,
-        ena => negative_state_ena,
-        wea => negative_state_wea,
-        addra => negative_state_addra,
-        dina => negative_state_dina,
+        ena => negative_state.ena,
+        wea => negative_state.wea,
+        addra => negative_state.addra,
+        dina => negative_state.dina,
         clkb => aclk,
-        enb => negative_state_enb,
-        -- web => negative_state_web,
-        -- dinb => negative_state_dinb,
-        addrb => negative_state_addrb,
-        doutb => negative_state_doutb
+        enb => negative_state.enb,
+        -- web => negative_state.web,
+        -- dinb => negative_state.dinb,
+        addrb => negative_state.addrb,
+        doutb => negative_state.doutb
     );
 
-    positive_state : blk_mem_state_filter
+    positive_state_mem : blk_mem_state_filter
     port map(
         clka => aclk,
-        ena => positive_state_ena,
-        wea => positive_state_wea,
-        addra => positive_state_addra,
-        dina => positive_state_dina,
+        ena => positive_state.ena,
+        wea => positive_state.wea,
+        addra => positive_state.addra,
+        dina => positive_state.dina,
         clkb => aclk,
-        enb => positive_state_enb,
-        -- web => positive_state_web,
-        -- dinb => positive_state_dinb,
-        addrb => positive_state_addrb,
-        doutb => positive_state_doutb
+        enb => positive_state.enb,
+        -- web => positive_state.web,
+        -- dinb => positive_state.dinb,
+        addrb => positive_state.addrb,
+        doutb => positive_state.doutb
     );
 
     pipeline : process (aclk, aresetn)
@@ -245,16 +273,21 @@ begin
         if rising_edge(aclk) then
 
             -- Defaults: no writes
-            positive_state_ena <= '0';
-            negative_state_ena <= '0';
-            positive_act_ena <= '0';
-            negative_act_ena <= '0';
+            positive_state.ena <= '0';
+            negative_state.ena <= '0';
+            positive_frame.ena <= '0';
+            negative_frame.ena <= '0';
+            -- Wea is not enabled, but it needs an input anyways
+            negative_frame.wea <= (others => '1');
+            positive_frame.wea <= (others => '1');
+            positive_state.wea <= (others => '1');
+            negative_state.wea <= (others => '1');
 
             -- Defaults: allow reads (or disable by default if you prefer)
-            positive_state_enb <= '0';
-            negative_state_enb <= '0';
-            positive_act_enb <= '0';
-            negative_act_enb <= '0';
+            positive_state.enb <= '0';
+            negative_state.enb <= '0';
+            positive_frame.enb <= '0';
+            negative_frame.enb <= '0';
 
             -- Move signals to the next stage of registers
             for k in 1 to PIPE_STAGES_C loop
@@ -266,10 +299,10 @@ begin
                     -- STAGE 1: Read the incoming AXI message. If valid, get the neuron address to route it to. Check which neurons in the cluster to activate.
                     -- Defaults to read but not write. This way, output port updates as the address and not one clock after
                     pipeStage(0).valid_event <= '0';
-                    negative_state_enb <= '1';
-                    positive_state_enb <= '1';
-                    positive_act_enb <= '1';
-                    negative_act_enb <= '1';
+                    negative_state.enb <= '1';
+                    positive_state.enb <= '1';
+                    positive_frame.enb <= '1';
+                    negative_frame.enb <= '1';
 
                     if s_axis_tvalid = '1' then
                         -- Divide by 4 or 2 shifts right, same as leaving out the 2LSb
@@ -286,16 +319,16 @@ begin
                             -- Read the value from memory
                             if (s_axis_tdata(63 downto 60) = POS_EVT) then
                                 pipeStage(0).excitation_polarity <= POSITIVE_CHANNEL;
-                                positive_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_state_addrb'length));
-                                positive_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_act_addrb'length));
-                                positive_state_enb <= '1';
-                                positive_act_enb <= '1';
+                                positive_state.addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_state.addrb'length));
+                                positive_frame.addrb <= std_logic_vector(to_unsigned(readOut_memory_address, positive_frame.addrb'length));
+                                positive_state.enb <= '1';
+                                positive_frame.enb <= '1';
                             else
                                 pipeStage(0).excitation_polarity <= NEGATIVE_CHANNEL;
-                                negative_state_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_state_addrb'length));
-                                negative_act_addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_act_addrb'length));
-                                negative_act_enb <= '1';
-                                negative_state_enb <= '1';
+                                negative_state.addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_state.addrb'length));
+                                negative_frame.addrb <= std_logic_vector(to_unsigned(readOut_memory_address, negative_frame.addrb'length));
+                                negative_frame.enb <= '1';
+                                negative_state.enb <= '1';
                             end if;
 
                             pipeStage(0).active_pixel(7) <= or_reduce(s_axis_tdata(31 downto 28));
@@ -312,11 +345,11 @@ begin
                     -- STAGE 2: Read from memory the corresponding address containing 8 neuron states.
                     if pipeStage(1).valid_event = '1' then
                         if pipeStage(1).excitation_polarity = POSITIVE_CHANNEL then
-                            word_in <= positive_state_doutb;
-                            frame_row <= positive_act_doutb;
+                            word_in <= positive_state.doutb;
+                            frame_row <= positive_frame.doutb;
                         else
-                            word_in <= negative_state_doutb;
-                            frame_row <= negative_act_doutb;
+                            word_in <= negative_state.doutb;
+                            frame_row <= negative_frame.doutb;
                         end if;
                     end if;
 
@@ -369,21 +402,21 @@ begin
                     -- STAGE 4: Write back to memory the updated neuron states
                     if pipeStage(3).valid_event = '1' then
                         if pipeStage(3).excitation_polarity = POSITIVE_CHANNEL then
-                            positive_state_addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, positive_state_addra'length));
-                            positive_state_dina <= word_out;
-                            positive_state_ena <= '1';
+                            positive_state.addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, positive_state.addra'length));
+                            positive_state.dina <= word_out;
+                            positive_state.ena <= '1';
 
-                            positive_act_addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, positive_act_addra'length));
-                            positive_act_dina <= spike_out;
-                            positive_act_ena <= '1';
+                            positive_frame.addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, positive_frame.addra'length));
+                            positive_frame.dina <= spike_out;
+                            positive_frame.ena <= '1';
                         else
-                            negative_state_addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, negative_state_addra'length));
-                            negative_state_dina <= word_out;
-                            negative_state_ena <= '1';
+                            negative_state.addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, negative_state.addra'length));
+                            negative_state.dina <= word_out;
+                            negative_state.ena <= '1';
 
-                            negative_act_addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, negative_act_addra'length));
-                            negative_act_dina <= spike_out;
-                            negative_act_ena <= '1';
+                            negative_frame.addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, negative_frame.addra'length));
+                            negative_frame.dina <= spike_out;
+                            negative_frame.ena <= '1';
                         end if;
                     end if;
 
@@ -422,21 +455,21 @@ begin
                         end if;
 
                         if reset_chanIdx = NEGATIVE_CHANNEL then
-                            negative_state_addra <= std_logic_vector(to_unsigned(reset_address, negative_state_addra'length));
-                            negative_state_dina <= (others => '0');
-                            negative_state_ena <= '1';
+                            negative_state.addra <= std_logic_vector(to_unsigned(reset_address, negative_state.addra'length));
+                            negative_state.dina <= (others => '0');
+                            negative_state.ena <= '1';
 
-                            negative_act_addra <= std_logic_vector(to_unsigned(reset_address, negative_act_addra'length));
-                            negative_act_dina <= (others => '0');
-                            negative_act_ena <= '1';
+                            negative_frame.addra <= std_logic_vector(to_unsigned(reset_address, negative_frame.addra'length));
+                            negative_frame.dina <= (others => '0');
+                            negative_frame.ena <= '1';
                         else
-                            positive_state_addra <= std_logic_vector(to_unsigned(reset_address, positive_state_addra'length));
-                            positive_state_dina <= (others => '0');
-                            positive_state_ena <= '1';
+                            positive_state.addra <= std_logic_vector(to_unsigned(reset_address, positive_state.addra'length));
+                            positive_state.dina <= (others => '0');
+                            positive_state.ena <= '1';
 
-                            positive_act_addra <= std_logic_vector(to_unsigned(reset_address, positive_act_addra'length));
-                            positive_act_dina <= (others => '0');
-                            positive_act_ena <= '1';
+                            positive_frame.addra <= std_logic_vector(to_unsigned(reset_address, positive_frame.addra'length));
+                            positive_frame.dina <= (others => '0');
+                            positive_frame.ena <= '1';
                         end if;
                     end if;
                 when others =>
@@ -485,23 +518,23 @@ begin
                     -- First FLUSH cycle: initialise indices and start negative channel
                     if prev_state /= FLUSH then
                         flush_address <= 0;
-                        positive_act_addrb <= (others => '0');
-                        negative_act_addrb <= (others => '0');
+                        positive_frame.addrb <= (others => '0');
+                        negative_frame.addrb <= (others => '0');
                         flush_rowIdx <= 0;
                         flush_colIdx <= 0;
                         flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
                         flush_chanIdx <= NEGATIVE_CHANNEL;
                         flush_ongoing <= '1';
-                        negative_act_enb <= '1';
+                        negative_frame.enb <= '1';
 
                         -- Ongoing FLUSH
                     elsif flush_ongoing_d = '1' then
                         if flush_chanIdx = POSITIVE_CHANNEL then
-                            positive_act_addrb <= std_logic_vector(unsigned(positive_act_addrb) + 1);
-                            positive_act_enb <= '1';
+                            positive_frame.addrb <= std_logic_vector(unsigned(positive_frame.addrb) + 1);
+                            positive_frame.enb <= '1';
                         else
-                            negative_act_addrb <= std_logic_vector(unsigned(negative_act_addrb) + 1);
-                            negative_act_enb <= '1';
+                            negative_frame.addrb <= std_logic_vector(unsigned(negative_frame.addrb) + 1);
+                            negative_frame.enb <= '1';
                         end if;
 
                         -- 1b) check whether something special happens
@@ -520,12 +553,12 @@ begin
                                         -- Last frame of the flush 
                                         axi_last_reg <= '1';
                                         flush_ongoing <= '0';
-                                        positive_act_enb <= '0';
+                                        positive_frame.enb <= '0';
                                     else
                                         -- If not last frame of the flush, change channel
                                         flush_chanIdx <= POSITIVE_CHANNEL;
-                                        positive_act_enb <= '1';
-                                        negative_act_enb <= '0';
+                                        positive_frame.enb <= '1';
+                                        negative_frame.enb <= '0';
                                     end if;
                                 else
                                     -- If not last row of frame, increase one position
@@ -542,9 +575,9 @@ begin
 
                         -- 2) read value
                         if flush_chanIdx_d = POSITIVE_CHANNEL then
-                            flush_out((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= positive_act_doutb;
+                            flush_out((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= positive_frame.doutb;
                         else
-                            flush_out((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= negative_act_doutb;
+                            flush_out((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= negative_frame.doutb;
                         end if;
                     end if; -- flush_ongoing = '1'
             end case;
