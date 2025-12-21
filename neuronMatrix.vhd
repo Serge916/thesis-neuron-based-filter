@@ -444,18 +444,22 @@ begin
                             negative_state.addra <= std_logic_vector(to_unsigned(reset_address, negative_state.addra'length));
                             negative_state.dina <= (others => '0');
                             negative_state.ena <= '1';
+                            negative_state.wea <= (others => '1');
 
                             negative_frame.addra <= std_logic_vector(to_unsigned(reset_address, negative_frame.addra'length));
                             negative_frame.dina <= (others => '0');
                             negative_frame.ena <= '1';
+                            negative_frame.wea <= (others => '1');
                         else
                             positive_state.addra <= std_logic_vector(to_unsigned(reset_address, positive_state.addra'length));
                             positive_state.dina <= (others => '0');
                             positive_state.ena <= '1';
+                            positive_state.wea <= (others => '1');
 
                             positive_frame.addra <= std_logic_vector(to_unsigned(reset_address, positive_frame.addra'length));
                             positive_frame.dina <= (others => '0');
                             positive_frame.ena <= '1';
+                            positive_frame.wea <= (others => '1');
                         end if;
                     end if;
                 when others =>
@@ -515,48 +519,50 @@ begin
 
                         -- Ongoing FLUSH
                     elsif flush_ongoing_d = '1' then
-                        if flush_chanIdx = POSITIVE_CHANNEL then
-                            positive_frame.addrb <= std_logic_vector(unsigned(positive_frame.addrb) + 1);
-                            positive_frame.enb <= '1';
-                        else
-                            negative_frame.addrb <= std_logic_vector(unsigned(negative_frame.addrb) + 1);
-                            negative_frame.enb <= '1';
-                        end if;
+                        if m_axis_tready = '1' then
+                            if flush_chanIdx = POSITIVE_CHANNEL then
+                                positive_frame.addrb <= std_logic_vector(unsigned(positive_frame.addrb) + 1);
+                                positive_frame.enb <= '1';
+                            else
+                                negative_frame.addrb <= std_logic_vector(unsigned(negative_frame.addrb) + 1);
+                                negative_frame.enb <= '1';
+                            end if;
 
-                        -- 1b) check whether something special happens
-                        if flush_buffIdx = 0 then
-                            -- Final part of the word
-                            flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
-                            axi_valid_reg <= '1';
+                            -- 1b) check whether something special happens
+                            if flush_buffIdx = 0 then
+                                -- Final part of the word
+                                flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
+                                axi_valid_reg <= '1';
 
-                            if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
-                                -- Last column of the row
-                                flush_colIdx <= 0;
-                                if flush_rowIdx = SNN_FRAME_WIDTH - 1 then
-                                    flush_rowIdx <= 0;
-                                    -- Last row of the frame
-                                    if flush_chanIdx = POSITIVE_CHANNEL then
-                                        -- Last frame of the flush 
-                                        axi_last_reg <= '1';
-                                        flush_ongoing <= '0';
-                                        positive_frame.enb <= '0';
+                                if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
+                                    -- Last column of the row
+                                    flush_colIdx <= 0;
+                                    if flush_rowIdx = SNN_FRAME_WIDTH - 1 then
+                                        flush_rowIdx <= 0;
+                                        -- Last row of the frame
+                                        if flush_chanIdx = POSITIVE_CHANNEL then
+                                            -- Last frame of the flush 
+                                            axi_last_reg <= '1';
+                                            flush_ongoing <= '0';
+                                            positive_frame.enb <= '0';
+                                        else
+                                            -- If not last frame of the flush, change channel
+                                            flush_chanIdx <= POSITIVE_CHANNEL;
+                                            positive_frame.enb <= '1';
+                                            negative_frame.enb <= '0';
+                                        end if;
                                     else
-                                        -- If not last frame of the flush, change channel
-                                        flush_chanIdx <= POSITIVE_CHANNEL;
-                                        positive_frame.enb <= '1';
-                                        negative_frame.enb <= '0';
+                                        -- If not last row of frame, increase one position
+                                        flush_rowIdx <= flush_rowIdx + 1;
                                     end if;
                                 else
-                                    -- If not last row of frame, increase one position
-                                    flush_rowIdx <= flush_rowIdx + 1;
+                                    -- If not last column of row, increase one position
+                                    flush_colIdx <= flush_colIdx + 1;
                                 end if;
                             else
-                                -- If not last column of row, increase one position
-                                flush_colIdx <= flush_colIdx + 1;
+                                -- If not last part of word, decrease one position in buffer
+                                flush_buffIdx <= flush_buffIdx - 1;
                             end if;
-                        else
-                            -- If not last part of word, decrease one position in buffer
-                            flush_buffIdx <= flush_buffIdx - 1;
                         end if;
 
                         -- 2) read value
