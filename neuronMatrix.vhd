@@ -12,8 +12,8 @@ entity neuronMatrix is
         AXIS_TUSER_WIDTH_G : positive := 1;
         GRID_SIZE_Y : positive := 128;
         GRID_SIZE_X : positive := 128;
-        SPIKE_ACCUMULATION_LIMIT : positive := 15000;
-        DECAY_COUNTER_LIMIT : positive := 10240;
+        SPIKE_ACCUMULATION_LIMIT : positive := 10;
+        DECAY_COUNTER_LIMIT : positive := 100;
         MEMBRANE_POTENTIAL_SIZE : positive := 8
     );
     port (
@@ -41,7 +41,6 @@ entity neuronMatrix is
 end entity neuronMatrix;
 
 architecture rtl of neuronMatrix is
-    signal s_axis_tready_signal : std_logic;
     -- X axis is 0 to 15 clusters of 32 elements. 16*32=512
     -- signal route_x : unsigned(3 downto 0);
     -- Y axis is 0 to 127
@@ -85,8 +84,12 @@ architecture rtl of neuronMatrix is
     signal reset_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
     signal reset_chanIdx : std_logic;
     -- Signals for decay
+    signal decay_address_read : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+    signal decay_address_write : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
     signal decay_ongoing : std_logic := '0';
-    signal decay_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+    signal decay_has_data : std_logic := '0';
+    signal decay_last_read_issued : std_logic := '0';
+    signal decay_ongoing_d : std_logic := '0';
     signal decay_chanIdx : std_logic;
     -- Registered AXI output (one-cycle pipeline for flush)
     signal axi_last_reg : std_logic := '0';
@@ -251,6 +254,10 @@ begin
         variable spike : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
         variable spike_accum : integer range 0 to NEURONS_PER_CLUSTER;
         variable readOut_memory_address : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 := 0;
+        variable decay_positive_word_out : std_logic_vector(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
+        variable decay_negative_word_out : std_logic_vector(MEMBRANE_POTENTIAL_SIZE * NEURONS_PER_CLUSTER - 1 downto 0);
+        variable decay_negative_cell : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
+        variable decay_positive_cell : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
     begin
         if rising_edge(aclk) then
 
@@ -373,7 +380,7 @@ begin
                         spike_out <= spike or frame_row;
                         -- Trigger frame flushing. Check whether there is an operation ongoing with spike_counter_hit. It should be '0' if nothing is happening.
                         -- if spike_counter >= SPIKE_ACCUMULATION_LIMIT and flush_ongoing = '0' then
-                        if spike_counter >= 5 then
+                        if spike_counter >= SPIKE_ACCUMULATION_LIMIT then
                             spike_counter_hit <= '1';
                             spike_counter <= 0;
                         else
@@ -408,16 +415,116 @@ begin
 
                 when DECAY =>
                     if prev_state = INTEGRATE then
+                        -- Start DECAY
                         decay_ongoing <= '1';
-                        decay_address <= 0;
-                        decay_chanIdx <= NEGATIVE_CHANNEL;
-                    end if;
-                    -- Calculate the address
-                    if decay_ongoing = '1' then
-                        -- Nothing for now
-                        decay_ongoing <= '0';
-                    end if;
 
+                        decay_has_data <= '0'; -- have_data = 0 on entry (no doutb yet)
+                        decay_last_read_issued <= '0';
+
+                        -- Prime: request read(0) now; next cycle doutb(0) is valid
+                        decay_address_read <= 1; -- next read to issue
+                        decay_address_write <= 0; -- next write address (matches doutb when have_data=1)
+
+                        positive_state.addrb <= std_logic_vector(to_unsigned(0, positive_state.addrb'length));
+                        positive_state.enb <= '1';
+                        negative_state.addrb <= std_logic_vector(to_unsigned(0, negative_state.addrb'length));
+                        negative_state.enb <= '1';
+
+                        -- No write on entry
+                        positive_state.ena <= '0';
+                        negative_state.ena <= '0';
+
+                    elsif decay_ongoing = '1' then
+
+                        ----------------------------------------------------------------------
+                        -- 1) WRITE stage (consume doutb from the read issued previous cycle)
+                        ----------------------------------------------------------------------
+                        if decay_has_data = '1' then -- have_data
+                            -- Compute decayed words from current doutb
+                            for i in 0 to NEURONS_PER_CLUSTER - 1 loop
+                                decay_negative_cell := unsigned(
+                                    negative_state.doutb((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE)
+                                    );
+                                decay_positive_cell := unsigned(
+                                    positive_state.doutb((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE)
+                                    );
+
+                                decay_negative_cell := decay_negative_cell srl 1;
+                                decay_positive_cell := decay_positive_cell srl 1;
+
+                                decay_negative_word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE)
+                                := std_logic_vector(decay_negative_cell);
+                                decay_positive_word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE)
+                                := std_logic_vector(decay_positive_cell);
+                            end loop;
+
+                            -- Write back to the address that produced doutb this cycle
+                            negative_state.addra <= std_logic_vector(to_unsigned(decay_address_write, negative_state.addra'length));
+                            negative_state.dina <= std_logic_vector(decay_negative_word_out);
+                            negative_state.ena <= '1';
+                            negative_state.wea <= (others => '1');
+
+                            positive_state.addra <= std_logic_vector(to_unsigned(decay_address_write, positive_state.addra'length));
+                            positive_state.dina <= std_logic_vector(decay_positive_word_out);
+                            positive_state.ena <= '1';
+                            positive_state.wea <= (others => '1');
+
+                            -- STOP condition: only stop AFTER we actually write the last address
+                            if (decay_last_read_issued = '1') and (decay_address_write = (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1) then
+                                decay_ongoing <= '0';
+                                decay_has_data <= '0';
+                                decay_last_read_issued <= '0';
+
+                                -- Stop further reads
+                                positive_state.enb <= '0';
+                                negative_state.enb <= '0';
+                            else
+                                -- Advance write pointer AFTER using it (and after stop check)
+                                decay_address_write <= decay_address_write + 1;
+                            end if;
+
+                        else
+                            -- No valid doutb yet
+                            positive_state.ena <= '0';
+                            negative_state.ena <= '0';
+                        end if;
+
+                        ----------------------------------------------------------------------
+                        -- 2) READ stage (issue next read until we've issued the last one)
+                        ----------------------------------------------------------------------
+                        if decay_last_read_issued = '0' then -- last_read_issued = 0
+                            if decay_address_read <= (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 then
+                                positive_state.addrb <= std_logic_vector(to_unsigned(decay_address_read, positive_state.addrb'length));
+                                positive_state.enb <= '1';
+                                negative_state.addrb <= std_logic_vector(to_unsigned(decay_address_read, negative_state.addrb'length));
+                                negative_state.enb <= '1';
+
+                                -- Mark that the last read has now been issued
+                                if decay_address_read = (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1 then
+                                    decay_last_read_issued <= '1'; -- last_read_issued
+                                end if;
+
+                                -- Next read address
+                                decay_address_read <= decay_address_read + 1;
+                            else
+                                -- Safety: no more reads to issue
+                                positive_state.enb <= '0';
+                                negative_state.enb <= '0';
+                                decay_last_read_issued <= '1';
+                            end if;
+                        else
+                            -- Drain phase: do not issue further reads
+                            positive_state.enb <= '0';
+                            negative_state.enb <= '0';
+                        end if;
+
+                        ----------------------------------------------------------------------
+                        -- 3) Update have_data for next cycle
+                        ----------------------------------------------------------------------
+                        -- After we have issued at least one read (entry did), doutb will be valid next cycle.
+                        decay_has_data <= '1';
+
+                    end if;
                 when RESET =>
                     -- RESET goes address by address setting everything to the initial value
                     if prev_state = FLUSH then
@@ -587,16 +694,23 @@ begin
     -- end process;
 
     -- Trigger decay execution
-    decayTrigger : process (aclk)
+    decayTrigger : process (aclk, state)
     begin
         if rising_edge(aclk) then
-            if decay_counter = DECAY_COUNTER_LIMIT then
-                decay_counter <= 0;
-                decay_counter_hit <= '1';
-            else
-                decay_counter <= decay_counter + 1;
-                decay_counter_hit <= '0';
-            end if;
+            case state is
+                when INTEGRATE =>
+                    if decay_counter = DECAY_COUNTER_LIMIT then
+                        decay_counter <= 0;
+                        decay_counter_hit <= '1';
+                    else
+                        decay_counter <= decay_counter + 1;
+                        decay_counter_hit <= '0';
+                    end if;
+                when others =>
+                    decay_counter <= 0;
+                    decay_counter_hit <= '0';
+
+            end case;
         end if;
     end process;
 
