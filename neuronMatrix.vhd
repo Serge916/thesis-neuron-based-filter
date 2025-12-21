@@ -14,6 +14,7 @@ entity neuronMatrix is
         GRID_SIZE_X : positive := 128;
         SPIKE_ACCUMULATION_LIMIT : positive := 10;
         DECAY_COUNTER_LIMIT : positive := 100;
+        DECAY_FACTOR : natural := 1;
         MEMBRANE_POTENTIAL_SIZE : positive := 8
     );
     port (
@@ -449,8 +450,8 @@ begin
                                     positive_state.doutb((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE)
                                     );
 
-                                decay_negative_cell := decay_negative_cell srl 1;
-                                decay_positive_cell := decay_positive_cell srl 1;
+                                decay_negative_cell := decay_negative_cell srl DECAY_FACTOR;
+                                decay_positive_cell := decay_positive_cell srl DECAY_FACTOR;
 
                                 decay_negative_word_out((i + 1) * MEMBRANE_POTENTIAL_SIZE - 1 downto i * MEMBRANE_POTENTIAL_SIZE)
                                 := std_logic_vector(decay_negative_cell);
