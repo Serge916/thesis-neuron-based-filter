@@ -94,46 +94,28 @@ architecture rtl of neuronMatrix is
     signal axi_valid_reg : std_logic := '0';
     signal axi_valid_reg_d : std_logic := '0';
 
-    -- -- Positive activation frame signals
-    -- signal positive_act_ena : std_logic := '0';
-    -- signal positive_act_wea : std_logic_vector(0 downto 0) := (others => '1');
-    -- signal positive_act_addra : std_logic_vector(10 downto 0) := (others => '0');
-    -- signal positive_act_dina : std_logic_vector(7 downto 0) := (others => '0');
-    -- signal positive_act_addrb : std_logic_vector(10 downto 0) := (others => '0');
-    -- signal positive_act_doutb : std_logic_vector(7 downto 0) := (others => '0');
-    -- signal positive_act_enb : std_logic := '0';
-    -- signal positive_act_web : std_logic_vector(0 downto 0) := (others => '0');
-    -- signal positive_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
-    -- -- Negative activation frame signals
-    -- signal negative_act_ena : std_logic := '0';
-    -- signal negative_act_wea : std_logic_vector(0 downto 0) := (others => '1');
-    -- signal negative_act_addra : std_logic_vector(10 downto 0) := (others => '0');
-    -- signal negative_act_dina : std_logic_vector(7 downto 0) := (others => '0');
-    -- signal negative_act_addrb : std_logic_vector(10 downto 0) := (others => '0');
-    -- signal negative_act_doutb : std_logic_vector(7 downto 0) := (others => '0');
-    -- signal negative_act_enb : std_logic := '0';
-    -- signal negative_act_web : std_logic_vector(0 downto 0) := (others => '0');
-    -- signal negative_act_dinb : std_logic_vector(7 downto 0) := (others => '0');
-    -- -- Negative neuron state signals
-    -- signal negative_state_ena : std_logic := '0';
-    -- signal negative_state_wea : std_logic_vector(0 downto 0) := (others => '1');
-    -- signal negative_state_addra : std_logic_vector(10 downto 0) := (others => '0');
-    -- signal negative_state_dina : std_logic_vector(63 downto 0) := (others => '0');
-    -- signal negative_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
-    -- signal negative_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
-    -- signal negative_state_enb : std_logic := '0';
-    -- signal negative_state_web : std_logic_vector(0 downto 0) := (others => '0');
-    -- signal negative_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
-    -- -- Negative neuron state signals
-    -- signal positive_state_ena : std_logic := '0';
-    -- signal positive_state_wea : std_logic_vector(0 downto 0) := (others => '1');
-    -- signal positive_state_addra : std_logic_vector(10 downto 0) := (others => '0');
-    -- signal positive_state_dina : std_logic_vector(63 downto 0) := (others => '0');
-    -- signal positive_state_addrb : std_logic_vector(10 downto 0) := (others => '0');
-    -- signal positive_state_doutb : std_logic_vector(63 downto 0) := (others => '0');
-    -- signal positive_state_enb : std_logic := '0';
-    -- signal positive_state_web : std_logic_vector(0 downto 0) := (others => '0');
-    -- signal positive_state_dinb : std_logic_vector(63 downto 0) := (others => '0');
+    -- Processes to BRAM controller
+    type process_memory_interface_t is record
+        rd_en : std_logic;
+        rd_addr : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
+        wr_en : std_logic;
+        wr_addr : integer range 0 to (SNN_FRAME_HEIGHT * SNN_FRAME_WIDTH/NEURONS_PER_CLUSTER) - 1;
+    end record;
+
+    signal integrate_positive_frame : process_memory_interface_t;
+    signal integrate_positive_state : process_memory_interface_t;
+    signal integrate_negative_frame : process_memory_interface_t;
+    signal integrate_negative_state : process_memory_interface_t;
+
+    signal flush_positive_frame : process_memory_interface_t;
+    signal flush_positive_state : process_memory_interface_t;
+    signal flush_negative_frame : process_memory_interface_t;
+    signal flush_negative_state : process_memory_interface_t;
+
+    signal reset_positive_frame : process_memory_interface_t;
+    signal reset_positive_state : process_memory_interface_t;
+    signal reset_negative_frame : process_memory_interface_t;
+    signal reset_negative_state : process_memory_interface_t;
 
     type state_mem_interface_t is record
         ena : std_logic;
@@ -278,10 +260,10 @@ begin
             positive_frame.ena <= '0';
             negative_frame.ena <= '0';
             -- Wea is not enabled, but it needs an input anyways
-            negative_frame.wea <= (others => '1');
-            positive_frame.wea <= (others => '1');
-            positive_state.wea <= (others => '1');
-            negative_state.wea <= (others => '1');
+            negative_frame.wea <= (others => '0');
+            positive_frame.wea <= (others => '0');
+            positive_state.wea <= (others => '0');
+            negative_state.wea <= (others => '0');
 
             -- Defaults: allow reads (or disable by default if you prefer)
             positive_state.enb <= '0';
@@ -299,10 +281,10 @@ begin
                     -- STAGE 1: Read the incoming AXI message. If valid, get the neuron address to route it to. Check which neurons in the cluster to activate.
                     -- Defaults to read but not write. This way, output port updates as the address and not one clock after
                     pipeStage(0).valid_event <= '0';
-                    negative_state.enb <= '1';
-                    positive_state.enb <= '1';
-                    positive_frame.enb <= '1';
-                    negative_frame.enb <= '1';
+                    negative_state.enb <= '0';
+                    positive_state.enb <= '0';
+                    positive_frame.enb <= '0';
+                    negative_frame.enb <= '0';
 
                     if s_axis_tvalid = '1' then
                         -- Divide by 4 or 2 shifts right, same as leaving out the 2LSb
@@ -405,18 +387,22 @@ begin
                             positive_state.addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, positive_state.addra'length));
                             positive_state.dina <= word_out;
                             positive_state.ena <= '1';
+                            positive_state.wea <= (others => '1');
 
                             positive_frame.addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, positive_frame.addra'length));
                             positive_frame.dina <= spike_out;
                             positive_frame.ena <= '1';
+                            positive_frame.wea <= (others => '1');
                         else
                             negative_state.addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, negative_state.addra'length));
                             negative_state.dina <= word_out;
                             negative_state.ena <= '1';
+                            negative_state.wea <= (others => '1');
 
                             negative_frame.addra <= std_logic_vector(to_unsigned(pipeStage(3).memory_address, negative_frame.addra'length));
                             negative_frame.dina <= spike_out;
                             negative_frame.ena <= '1';
+                            negative_frame.wea <= (others => '1');
                         end if;
                     end if;
 
@@ -583,6 +569,16 @@ begin
             end case;
         end if;
     end process;
+
+    -- bram_controller : process (state)
+    -- case state is
+    --     when INTEGRATE =>
+    --     when FLUSH =>
+    --     when DECAY =>
+    --     when RESET =>
+    -- end case;
+    -- begin
+    -- end process;
 
     -- Trigger decay execution
     decayTrigger : process (aclk)
