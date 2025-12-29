@@ -105,6 +105,7 @@ begin
         if hdr4 = x"8" then
           -- next 28 bits are high time
           time_high28 := unsigned(v(59 downto 32));
+          next; -- To avoid raising the Non-monotonic warning. Gotta rework a bit the logic in case printing this is needed
         end if;
 
         --------------------------------------------------------------------
