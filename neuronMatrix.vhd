@@ -12,8 +12,8 @@ entity neuronMatrix is
         AXIS_TUSER_WIDTH_G : positive := 1;
         GRID_SIZE_Y : positive := 128;
         GRID_SIZE_X : positive := 128;
-        SPIKE_ACCUMULATION_LIMIT : positive := 10;
-        DECAY_COUNTER_LIMIT : positive := 100;
+        SPIKE_ACCUMULATION_LIMIT : positive := 100;
+        DECAY_COUNTER_LIMIT : positive := 10e6; -- Equals to 1s with G_TCLK := 100 ns 
         DECAY_FACTOR : natural := 1;
         MEMBRANE_POTENTIAL_SIZE : positive := 8
     );
