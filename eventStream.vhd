@@ -8,7 +8,7 @@ use ieee.std_logic_textio.all;
 entity eventStream is
   generic (
     G_FILE : string := "../../../../eventFilter.srcs/sources_1/new/eventInputFiles/in_evt_file.evt";
-    G_TCLK : time := 100 ns;
+    G_TCLK : time := 8 ns; -- 125 MHz
     G_TS_UNIT : time := 1 us; -- one timestamp tick = 1 us 
     TIME_SPACED_EVENTS : std_logic := '1';
     O_FILE : string := "../../../../eventFilter/eventFilter.srcs/sources_1/new/filterOutput.txt"
