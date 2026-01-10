@@ -8,7 +8,8 @@ use xil_defaultlib.constants_pkg.all;
 entity neuronFilter is
   generic (
     AXIS_TDATA_WIDTH_G : positive := 64;
-    AXIS_TUSER_WIDTH_G : positive := 1
+    AXIS_TUSER_WIDTH_G : positive := 1;
+    SPIKE_ACCUMULATION_LIMIT : positive := 800
   );
   port (
     -- Clock and Reset
@@ -45,7 +46,7 @@ architecture rtl of neuronFilter is
   signal tlast_cropper_matrix : std_logic;
 
 begin
-  cropper : entity work.cropper
+  cropper : entity xil_defaultlib.cropper
     generic map(
       AXIS_TDATA_WIDTH_G => 64,
       AXIS_TUSER_WIDTH_G => 1,
@@ -75,10 +76,12 @@ begin
       m_axis_tlast => tlast_cropper_matrix
     );
 
-  matrix : entity work.neuronMatrix
+  matrix : entity xil_defaultlib.neuronMatrix
     generic map(
-      AXIS_TDATA_WIDTH_G => 64,
-      AXIS_TUSER_WIDTH_G => 1
+      AXIS_TDATA_WIDTH_G => AXIS_TDATA_WIDTH_G,
+      AXIS_TUSER_WIDTH_G => AXIS_TUSER_WIDTH_G,
+      SPIKE_ACCUMULATION_LIMIT => SPIKE_ACCUMULATION_LIMIT
+
     )
     port map(
       -- Clock and Reset

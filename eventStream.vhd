@@ -5,13 +5,16 @@ use ieee.numeric_std.all;
 use std.textio.all;
 use ieee.std_logic_textio.all;
 
+library xil_defaultlib;
+use xil_defaultlib.all;
+
 entity eventStream is
   generic (
     G_FILE : string := "../../../../eventFilter.srcs/sources_1/new/eventInputFiles/in_evt_file.evt";
     G_TCLK : time := 8 ns; -- 125 MHz
     G_TS_UNIT : time := 1 us; -- one timestamp tick = 1 us 
     TIME_SPACED_EVENTS : std_logic := '1';
-    O_FILE : string := "../../../../eventFilter/eventFilter.srcs/sources_1/new/filterOutput.txt"
+    O_FILE : string := "../../../../eventFilter.srcs/sources_1/new/filterOutput.txt"
   );
 end entity;
 
@@ -205,10 +208,11 @@ begin
   end process;
 
   -- DUT
-  uut : entity work.neuronFilter
+  uut : entity xil_defaultlib.neuronFilter
     generic map(
       AXIS_TDATA_WIDTH_G => C_TDATA_W,
-      AXIS_TUSER_WIDTH_G => C_TUSER_W
+      AXIS_TUSER_WIDTH_G => C_TUSER_W,
+      SPIKE_ACCUMULATION_LIMIT => 5
     )
     port map(
       aclk => aclk,

@@ -647,12 +647,6 @@ begin
                                     buffer_free <= '0';
                                     axi_out_last_next <= '0';
 
-                                    -- -- TLAST condition
-                                    -- if (flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1) and
-                                    --     (flush_rowIdx = SNN_FRAME_HEIGHT - 1) and
-                                    --     (flush_chanIdx = POSITIVE_CHANNEL) then
-                                    -- end if;
-
                                     if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
                                         -- Last column of the row
                                         flush_colIdx <= 0;

@@ -62,7 +62,7 @@ begin
   can_accept <= (not m_axis_tvalid_reg) or (m_axis_tvalid_reg and m_axis_tready);
   s_axis_tready <= can_accept;
 
-  do_in_hs <= s_axis_tvalid and s_axis_tready;
+  do_in_hs <= s_axis_tvalid and can_accept;
   do_out_hs <= m_axis_tvalid_reg and m_axis_tready;
 
   m_axis_tvalid <= m_axis_tvalid_reg;
