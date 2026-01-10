@@ -43,79 +43,86 @@ architecture rtl of cropper is
   constant ROI_HEIGHT_BASE_PIXEL : positive := (720 - ROI_HEIGHT_PIXEL_AMOUNT)/2;
   constant ROI_HEIGHT_FINAL_PIXEL : positive := 720 - (720 - ROI_HEIGHT_PIXEL_AMOUNT)/2;
 
-  signal forward_packet : std_logic := '0';
-  signal s_axis_tready_signal : std_logic;
-
   signal m_axis_tvalid_reg : std_logic := '0';
   signal m_axis_tdata_reg : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0);
   signal m_axis_tkeep_reg : std_logic_vector((AXIS_TDATA_WIDTH_G/8) - 1 downto 0);
   signal m_axis_tuser_reg : std_logic_vector(AXIS_TUSER_WIDTH_G - 1 downto 0);
   signal m_axis_tlast_reg : std_logic := '0';
 
+  -- Handshake signals
+  signal can_accept : std_logic;
+  signal do_in_hs : std_logic;
+  signal do_out_hs : std_logic;
+
   signal address_map_x : std_logic_vector(10 downto 0);
   signal address_map_y : std_logic_vector(10 downto 0);
+
 begin
-
-  process (aclk, aresetn)
-    variable forward : std_logic;
-    variable count : unsigned(5 downto 0);
-    variable address_map_x : std_logic_vector(10 downto 0);
-    variable address_map_y : std_logic_vector(10 downto 0);
-
-  begin
-    if aresetn = '0' then
-      forward := '0';
-      count := (others => '0');
-      forward_packet <= '0';
-      m_axis_tvalid_reg <= '0';
-      m_axis_tdata_reg <= (others => '0');
-      m_axis_tkeep_reg <= (others => '0');
-      m_axis_tuser_reg <= (others => '0');
-      m_axis_tlast_reg <= '0';
-
-    elsif rising_edge(aclk) then
-      m_axis_tvalid_reg <= '0';
-
-      if s_axis_tvalid = '1' and s_axis_tready_signal = '1' then
-        address_map_x := std_logic_vector(unsigned(s_axis_tdata(53 downto 43)) - to_unsigned(ROI_WIDTH_BASE_PIXEL, 11));
-        address_map_y := std_logic_vector(unsigned(s_axis_tdata(42 downto 32)) - to_unsigned(ROI_HEIGHT_BASE_PIXEL, 11));
-
-        -- address_map_x := s_axis_tdata(53 downto 43);
-        -- address_map_y := s_axis_tdata(42 downto 32);
-        -- TIME_EVT should always go through if flag is set
-        if (s_axis_tdata(63 downto 60) = TIME_HIGH_EVT and not LET_THROUGH_ONLY_EVENTS) or
-          -- TRIG_EVT should always go through if flag is set
-          (s_axis_tdata(63 downto 60) = TRIG_EVT and not LET_THROUGH_ONLY_EVENTS) or
-          -- ROI
-          (unsigned(s_axis_tdata(53 downto 43)) >= ROI_WIDTH_BASE_PIXEL and unsigned(s_axis_tdata(53 downto 43)) < ROI_WIDTH_FINAL_PIXEL and
-          unsigned(s_axis_tdata(42 downto 32)) >= ROI_HEIGHT_BASE_PIXEL and unsigned(s_axis_tdata(42 downto 32)) < ROI_HEIGHT_FINAL_PIXEL) then
-
-          forward := '1';
-        else
-          forward := '0';
-        end if;
-
-        if forward = '1' then
-          m_axis_tvalid_reg <= '1';
-          m_axis_tdata_reg <= s_axis_tdata(63 downto 54) & address_map_x & address_map_y & s_axis_tdata(31 downto 0);
-          m_axis_tkeep_reg <= s_axis_tkeep;
-          m_axis_tuser_reg <= s_axis_tuser;
-          m_axis_tlast_reg <= s_axis_tlast;
-        end if;
-        forward_packet <= forward;
-
-      end if;
-    end if;
-  end process;
-
   -- Always ready to receive data when downstream is ready or when we're going to filter out
-  s_axis_tready_signal <= m_axis_tready or not forward_packet;
-  s_axis_tready <= s_axis_tready_signal;
+  can_accept <= (not m_axis_tvalid_reg) or (m_axis_tvalid_reg and m_axis_tready);
+  s_axis_tready <= can_accept;
+
+  do_in_hs <= s_axis_tvalid and s_axis_tready;
+  do_out_hs <= m_axis_tvalid_reg and m_axis_tready;
 
   m_axis_tvalid <= m_axis_tvalid_reg;
   m_axis_tdata <= m_axis_tdata_reg;
   m_axis_tkeep <= m_axis_tkeep_reg;
   m_axis_tuser <= m_axis_tuser_reg;
   m_axis_tlast <= m_axis_tlast_reg;
+
+  process (aclk)
+    variable forward : std_logic;
+    variable address_map_x : std_logic_vector(10 downto 0);
+    variable address_map_y : std_logic_vector(10 downto 0);
+
+  begin
+
+    if rising_edge(aclk) then
+      if aresetn = '0' then
+        m_axis_tvalid_reg <= '0';
+        m_axis_tdata_reg <= (others => '0');
+        m_axis_tkeep_reg <= (others => '0');
+        m_axis_tuser_reg <= (others => '0');
+        m_axis_tlast_reg <= '0';
+
+      else
+        -- If output handshakes, clear valid (unless overwritten by new forward below)
+        if do_out_hs = '1' then
+          m_axis_tvalid_reg <= '0';
+        end if;
+
+        -- Accept new input beat when possible
+        if do_in_hs = '1' then
+          address_map_x := std_logic_vector(unsigned(s_axis_tdata(53 downto 43)) - to_unsigned(ROI_WIDTH_BASE_PIXEL, 11));
+          address_map_y := std_logic_vector(unsigned(s_axis_tdata(42 downto 32)) - to_unsigned(ROI_HEIGHT_BASE_PIXEL, 11));
+
+          -- address_map_x := s_axis_tdata(53 downto 43);
+          -- address_map_y := s_axis_tdata(42 downto 32);
+          -- TIME_EVT should always go through if flag is set
+          if (s_axis_tdata(63 downto 60) = TIME_HIGH_EVT and not LET_THROUGH_ONLY_EVENTS) or
+            -- TRIG_EVT should always go through if flag is set
+            (s_axis_tdata(63 downto 60) = TRIG_EVT and not LET_THROUGH_ONLY_EVENTS) or
+            -- ROI
+            (unsigned(s_axis_tdata(53 downto 43)) >= ROI_WIDTH_BASE_PIXEL and unsigned(s_axis_tdata(53 downto 43)) < ROI_WIDTH_FINAL_PIXEL and
+            unsigned(s_axis_tdata(42 downto 32)) >= ROI_HEIGHT_BASE_PIXEL and unsigned(s_axis_tdata(42 downto 32)) < ROI_HEIGHT_FINAL_PIXEL) then
+
+            forward := '1';
+          else
+            forward := '0';
+          end if;
+
+          if forward = '1' then
+            m_axis_tvalid_reg <= '1';
+            m_axis_tdata_reg <= s_axis_tdata(63 downto 54) & address_map_x & address_map_y & s_axis_tdata(31 downto 0);
+            m_axis_tkeep_reg <= s_axis_tkeep;
+            m_axis_tuser_reg <= s_axis_tuser;
+            m_axis_tlast_reg <= s_axis_tlast;
+          end if;
+
+        end if;
+      end if;
+    end if;
+  end process;
 
 end rtl;
