@@ -98,6 +98,11 @@ architecture rtl of neuronMatrix is
     signal axi_valid_reg : std_logic := '0';
     signal axi_valid_reg_d : std_logic := '0';
 
+    signal axi_in_hs : std_logic;
+    signal axi_in_ready : std_logic;
+    signal axi_out_hs : std_logic;
+    signal buffer_free : std_logic;
+
     -- Processes to BRAM controller
     type process_memory_interface_t is record
         rd_en : std_logic;
@@ -250,6 +255,10 @@ begin
         doutb => positive_state.doutb
     );
 
+    s_axis_tready <= axi_in_ready;
+    axi_in_hs <= s_axis_tvalid and axi_in_ready;
+    axi_out_hs <= m_axis_tready and axi_valid_reg_d;
+
     pipeline : process (aclk, aresetn)
         variable cell : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
         variable spike : std_logic_vector(NEURONS_PER_CLUSTER - 1 downto 0);
@@ -294,7 +303,7 @@ begin
                     positive_frame.enb <= '0';
                     negative_frame.enb <= '0';
 
-                    if s_axis_tvalid = '1' then
+                    if axi_in_hs = '1' then
                         -- Divide by 4 or 2 shifts right, same as leaving out the 2LSb
                         -- Target dimension is 128, only 7 bits needed. Therefore, get the slice [8:2]
                         -- On the X axis, we divide by 7 (128 in total), as neurons are clustered by EVT2.1
@@ -597,18 +606,18 @@ begin
             case state is
                     -- INTEGRATE: normal operation, no flush output
                 when INTEGRATE =>
-                    s_axis_tready <= '1';
+                    axi_in_ready <= '1';
 
                     -- DECAY: no AXI output, just stall input
                 when DECAY =>
-                    s_axis_tready <= '0';
+                    axi_in_ready <= '0';
                     -- DECAY: no AXI output, just stall input
                 when RESET =>
-                    s_axis_tready <= '0';
+                    axi_in_ready <= '0';
 
                     -- FLUSH: walk through frame and emit AXI words
                 when FLUSH =>
-                    s_axis_tready <= '0';
+                    axi_in_ready <= '0';
                     flush_ongoing_d <= flush_ongoing;
                     flush_chanIdx_d <= flush_chanIdx;
                     flush_buffIdx_d <= flush_buffIdx;
@@ -622,12 +631,13 @@ begin
                         flush_colIdx <= 0;
                         flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
                         flush_chanIdx <= NEGATIVE_CHANNEL;
+                        buffer_free <= '1';
                         flush_ongoing <= '1';
                         negative_frame.enb <= '1';
 
                         -- Ongoing FLUSH
                     elsif flush_ongoing_d = '1' then
-                        if m_axis_tready = '1' then
+                        if buffer_free = '1' then
                             if flush_chanIdx = POSITIVE_CHANNEL then
                                 positive_frame.addrb <= std_logic_vector(unsigned(positive_frame.addrb) + 1);
                                 positive_frame.enb <= '1';
@@ -641,11 +651,12 @@ begin
                                 -- Final part of the word
                                 flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
                                 axi_valid_reg <= '1';
+                                buffer_free <= '0';
 
                                 if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
                                     -- Last column of the row
                                     flush_colIdx <= 0;
-                                    if flush_rowIdx = SNN_FRAME_WIDTH - 1 then
+                                    if flush_rowIdx = SNN_FRAME_HEIGHT - 1 then
                                         flush_rowIdx <= 0;
                                         -- Last row of the frame
                                         if flush_chanIdx = POSITIVE_CHANNEL then
@@ -670,6 +681,11 @@ begin
                             else
                                 -- If not last part of word, decrease one position in buffer
                                 flush_buffIdx <= flush_buffIdx - 1;
+                            end if;
+                        else
+                            -- Wait for handshake
+                            if axi_out_hs = '1' then
+                                buffer_free <= '1';
                             end if;
                         end if;
 
