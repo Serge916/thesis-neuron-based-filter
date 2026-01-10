@@ -79,6 +79,7 @@ architecture rtl of neuronMatrix is
     signal flush_colIdx : integer range 0 to SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1;
     signal flush_chanIdx : std_logic;
     signal flush_chanIdx_d : std_logic;
+    signal flush_has_data : std_logic;
 
     -- Signals for reset
     signal reset_ongoing : std_logic := '0';
@@ -93,15 +94,14 @@ architecture rtl of neuronMatrix is
     signal decay_ongoing_d : std_logic := '0';
     signal decay_chanIdx : std_logic;
     -- Registered AXI output (one-cycle pipeline for flush)
-    signal axi_last_reg : std_logic := '0';
-    signal axi_last_reg_d : std_logic := '0';
-    signal axi_valid_reg : std_logic := '0';
-    signal axi_valid_reg_d : std_logic := '0';
-
     signal axi_in_hs : std_logic;
     signal axi_in_ready : std_logic;
     signal axi_out_hs : std_logic;
     signal buffer_free : std_logic;
+    signal axi_out_valid : std_logic := '0';
+    signal axi_out_data : std_logic_vector(AXIS_TDATA_WIDTH_G - 1 downto 0);-- := (others => '0');
+    signal axi_out_last : std_logic := '0';
+    signal axi_out_last_next : std_logic := '0';
 
     -- Processes to BRAM controller
     type process_memory_interface_t is record
@@ -257,7 +257,13 @@ begin
 
     s_axis_tready <= axi_in_ready;
     axi_in_hs <= s_axis_tvalid and axi_in_ready;
-    axi_out_hs <= m_axis_tready and axi_valid_reg_d;
+    axi_out_hs <= m_axis_tready and axi_out_valid;
+
+    m_axis_tvalid <= axi_out_valid;
+    m_axis_tdata <= axi_out_data;
+    m_axis_tkeep <= (others => '1');
+    m_axis_tuser <= (others => '1');
+    m_axis_tlast <= axi_out_last;
 
     pipeline : process (aclk, aresetn)
         variable cell : unsigned(MEMBRANE_POTENTIAL_SIZE - 1 downto 0);
@@ -584,24 +590,6 @@ begin
             end case;
 
             -- AXI Stream Controller part
-            -- AXI Valid and AXI last are driven with 1 clock difference
-            axi_valid_reg <= '0';
-            axi_valid_reg_d <= axi_valid_reg;
-            axi_last_reg <= '0';
-            axi_last_reg_d <= axi_last_reg;
-            m_axis_tlast <= axi_last_reg_d;
-            m_axis_tvalid <= axi_valid_reg_d;
-            -- If axi_valid = 1, the data is already is flush_out
-            if axi_valid_reg_d = '1' then
-                m_axis_tdata <= flush_out;
-            end if;
-
-            -- The logic for AXI ready must be yet implemented
-            -- if m_axis_tready = '1' then ...
-
-            -- The rest of the AXI signals are not used
-            m_axis_tkeep <= (others => '1');
-            m_axis_tuser <= (others => '1');
 
             case state is
                     -- INTEGRATE: normal operation, no flush output
@@ -618,7 +606,6 @@ begin
                     -- FLUSH: walk through frame and emit AXI words
                 when FLUSH =>
                     axi_in_ready <= '0';
-                    flush_ongoing_d <= flush_ongoing;
                     flush_chanIdx_d <= flush_chanIdx;
                     flush_buffIdx_d <= flush_buffIdx;
 
@@ -632,83 +619,104 @@ begin
                         flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
                         flush_chanIdx <= NEGATIVE_CHANNEL;
                         buffer_free <= '1';
+                        axi_out_last_next <= '0';
                         flush_ongoing <= '1';
                         negative_frame.enb <= '1';
+                        flush_has_data <= '0'; --No valid data just yet
 
                         -- Ongoing FLUSH
-                    elsif flush_ongoing_d = '1' then
+                    elsif flush_ongoing = '1' then
                         if buffer_free = '1' then
-                            if flush_chanIdx = POSITIVE_CHANNEL then
-                                positive_frame.addrb <= std_logic_vector(unsigned(positive_frame.addrb) + 1);
-                                positive_frame.enb <= '1';
-                            else
-                                negative_frame.addrb <= std_logic_vector(unsigned(negative_frame.addrb) + 1);
-                                negative_frame.enb <= '1';
-                            end if;
+                            if flush_has_data = '1' then
+                                -- We can read
+                                if flush_chanIdx = POSITIVE_CHANNEL then
+                                    positive_frame.addrb <= std_logic_vector(unsigned(positive_frame.addrb) + 1);
+                                    positive_frame.enb <= '1';
+                                else
+                                    negative_frame.addrb <= std_logic_vector(unsigned(negative_frame.addrb) + 1);
+                                    negative_frame.enb <= '1';
+                                end if;
 
-                            -- 1b) check whether something special happens
-                            if flush_buffIdx = 0 then
-                                -- Final part of the word
-                                flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
-                                axi_valid_reg <= '1';
-                                buffer_free <= '0';
+                                -- 1b) check whether something special happens
+                                if flush_buffIdx = 0 then
+                                    -- Final part of the word
+                                    flush_buffIdx <= FLUSH_BUFFER_POSITIONS - 1;
+                                    -- latch the completed word into output registers
+                                    -- axi_out_data <= flush_out;
+                                    -- axi_out_valid <= '1';
+                                    buffer_free <= '0';
+                                    axi_out_last_next <= '0';
 
-                                if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
-                                    -- Last column of the row
-                                    flush_colIdx <= 0;
-                                    if flush_rowIdx = SNN_FRAME_HEIGHT - 1 then
-                                        flush_rowIdx <= 0;
-                                        -- Last row of the frame
-                                        if flush_chanIdx = POSITIVE_CHANNEL then
-                                            -- Last frame of the flush 
-                                            axi_last_reg <= '1';
-                                            flush_ongoing <= '0';
-                                            positive_frame.enb <= '0';
+                                    -- -- TLAST condition
+                                    -- if (flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1) and
+                                    --     (flush_rowIdx = SNN_FRAME_HEIGHT - 1) and
+                                    --     (flush_chanIdx = POSITIVE_CHANNEL) then
+                                    -- end if;
+
+                                    if flush_colIdx = SNN_FRAME_WIDTH/AXIS_TDATA_WIDTH_G - 1 then
+                                        -- Last column of the row
+                                        flush_colIdx <= 0;
+                                        if flush_rowIdx = SNN_FRAME_HEIGHT - 1 then
+                                            flush_rowIdx <= 0;
+                                            -- Last row of the frame
+                                            if flush_chanIdx = POSITIVE_CHANNEL then
+                                                -- Last frame of the flush 
+                                                axi_out_last_next <= '1';
+                                                positive_frame.enb <= '0';
+                                            else
+                                                -- If not last frame of the flush, change channel
+                                                flush_chanIdx <= POSITIVE_CHANNEL;
+                                                positive_frame.enb <= '1';
+                                                negative_frame.enb <= '0';
+                                            end if;
                                         else
-                                            -- If not last frame of the flush, change channel
-                                            flush_chanIdx <= POSITIVE_CHANNEL;
-                                            positive_frame.enb <= '1';
-                                            negative_frame.enb <= '0';
+                                            -- If not last row of frame, increase one position
+                                            flush_rowIdx <= flush_rowIdx + 1;
                                         end if;
                                     else
-                                        -- If not last row of frame, increase one position
-                                        flush_rowIdx <= flush_rowIdx + 1;
+                                        -- If not last column of row, increase one position
+                                        flush_colIdx <= flush_colIdx + 1;
                                     end if;
                                 else
-                                    -- If not last column of row, increase one position
-                                    flush_colIdx <= flush_colIdx + 1;
+                                    -- If not last part of word, decrease one position in buffer
+                                    flush_buffIdx <= flush_buffIdx - 1;
                                 end if;
+
                             else
-                                -- If not last part of word, decrease one position in buffer
-                                flush_buffIdx <= flush_buffIdx - 1;
+                                -- No data available yet. Next cycle there will be
+                                flush_has_data <= '1';
                             end if;
                         else
+                            -- Move flush buffer into axi_out
+                            axi_out_valid <= '1';
+                            axi_out_last <= '0';
+                            if axi_out_last_next = '1' then
+                                axi_out_last <= '1';
+                            end if;
                             -- Wait for handshake
                             if axi_out_hs = '1' then
                                 buffer_free <= '1';
+                                axi_out_valid <= '0';
+                                axi_out_last <= '0';
+                                -- Last handshake finishes flush
+                                if axi_out_last = '1' then
+                                    flush_ongoing <= '0';
+                                end if;
                             end if;
                         end if;
 
                         -- 2) read value
-                        if flush_chanIdx_d = POSITIVE_CHANNEL then
-                            flush_out((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= positive_frame.doutb;
-                        else
-                            flush_out((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= negative_frame.doutb;
+                        if flush_has_data = '1' and axi_out_valid = '0' then
+                            if flush_chanIdx_d = POSITIVE_CHANNEL then
+                                axi_out_data((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= positive_frame.doutb;
+                            else
+                                axi_out_data((flush_buffIdx_d + 1) * NEURONS_PER_CLUSTER - 1 downto flush_buffIdx_d * NEURONS_PER_CLUSTER) <= negative_frame.doutb;
+                            end if;
                         end if;
                     end if; -- flush_ongoing = '1'
             end case;
         end if;
     end process;
-
-    -- bram_controller : process (state)
-    -- case state is
-    --     when INTEGRATE =>
-    --     when FLUSH =>
-    --     when DECAY =>
-    --     when RESET =>
-    -- end case;
-    -- begin
-    -- end process;
 
     -- Trigger decay execution
     decayTrigger : process (aclk, state)
